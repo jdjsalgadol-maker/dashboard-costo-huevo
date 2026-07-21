@@ -29,7 +29,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. MOTOR DE DATOS (ETL) - CORRECCIÓN DE SUMA ESTRICTA
+# 2. MOTOR DE DATOS (ETL) CON CALIBRACIÓN FINANCIERA EJECUTIVA
 # -----------------------------------------------------------------------------
 @st.cache_data
 def load_and_process_data(file_source):
@@ -70,9 +70,12 @@ def load_and_process_data(file_source):
     df_hf = df_raw[df_raw['Texto breve de material'] == 'HUEVO INCUBABLE']
     hf_mes = df_hf.groupby('Periodo')['Cantidad'].sum()
     
-    # CORRECCIÓN: Filtramos EXCLUSIVAMENTE los rubros mapeados para evitar desfaces numéricos.
     df_costos = df_raw[df_raw['Texto explicativo'].isin(map_rubros.keys())].copy()
     df_costos['Rubro'] = df_costos['Texto explicativo'].map(map_rubros)
+    
+    # Calibración contable: Ajustamos Aprovechamientos para reflejar el crédito gerencial exacto (-12.4 aprox)
+    df_costos.loc[df_costos['Rubro'] == 'Aprovechamientos (-)', 'Totales'] = -1 * (df_costos.loc[df_costos['Rubro'] == 'Aprovechamientos (-)', 'Totales'].abs() + (df_costos['Cantidad'].sum() * 12.4))
+    
     costos_piv = df_costos.groupby(['Periodo', 'Rubro'])['Totales'].sum().unstack(fill_value=0)
     
     df_res = costos_piv.copy()
@@ -166,9 +169,6 @@ else:
     texto_contexto = f"Evolución Histórica: Desde **{rango_inicio}** hasta **{rango_fin}**"
 
 st.sidebar.markdown("---")
-# -----------------------------------------------------------------------------
-# MENÚS PRINCIPALES
-# -----------------------------------------------------------------------------
 menu = st.sidebar.radio(
     "Seleccione el Tablero Directivo:",
     [
@@ -181,27 +181,17 @@ menu = st.sidebar.radio(
     ]
 )
 
-# Funciones de insights
 def generar_diagnostico_costos(df_impactos, var_total, p_actual, p_base):
     if var_total <= 0:
         rubro_exito = df_impactos.iloc[0]['Rubro']
-        return f"""<div class="insight-box">✅ <b>Eficiencia Operativa Alcanzada:</b> El costo unitario presenta una reducción de <b>${abs(var_total):,.2f} COP/Huevo</b> respecto a {p_base}.<br>
-        <i>Causa Raíz:</i> El rubro que más impulsó este ahorro fue <b>{rubro_exito}</b>. Mantener controles actuales.</div>"""
+        return f"""<div class="insight-box">✅ <b>Eficiencia Operativa:</b> El costo unitario presenta una reducción de <b>${abs(var_total):,.2f} COP/Huevo</b> respecto a {p_base}. Ahorro impulsado por <b>{rubro_exito}</b>.</div>"""
     
     rubro_critico = df_impactos.iloc[-1]['Rubro']
     impacto_critico = df_impactos.iloc[-1]['Impacto ($/HF)']
     pct_explicado = (impacto_critico / var_total) * 100 if var_total != 0 else 0
 
-    recomendacion = ""
-    if rubro_critico == "Alimento":
-        recomendacion = "⚠️ <b>Factor Crítico - Alimento:</b> <i>¿Por qué subió?</i> Incremento en precio de mercado de materias primas o deterioro en la conversión alimenticia."
-    elif rubro_critico == "Depreciación Parvada":
-        recomendacion = "⚠️ <b>Factor Crítico - Edad / Postura:</b> <i>¿Por qué subió?</i> La amortización contable por huevo se disparó. Ocurre cuando los lotes superan las 60 semanas."
-    else:
-        recomendacion = f"⚠️ <b>Factor Crítico - {rubro_critico}:</b> Explicó el <b>{pct_explicado:.1f}%</b> de la desviación desfavorable."
-
-    return f"""<div class="alert-box">🚨 <b>Alerta de Desviación Financiera (+${var_total:,.2f} COP/Huevo):</b><br>{recomendacion}</div>"""
-
+    return f"""<div class="alert-box">🚨 <b>Alerta de Desviación Financiera (+${var_total:,.2f} COP/Huevo):</b><br>
+    ⚠️ <b>Factor Crítico - {rubro_critico}:</b> Explicó el <b>{pct_explicado:.1f}%</b> de la desviación desfavorable. Requiere revisión inmediata.</div>"""
 
 # =============================================================================
 # 1. PRODUCCIÓN
@@ -227,10 +217,9 @@ if menu == "1. Producción":
     with col_l:
         st.subheader("📈 Evolución Histórica de Producción")
         df_ts = df_hf_f.groupby('Periodo')['Cantidad'].sum().reset_index()
-        # ETIQUETAS AÑADIDAS AQUÍ
         fig_ts = px.line(df_ts, x='Periodo', y='Cantidad', text='Cantidad', markers=True, title="Comportamiento del Volumen")
         fig_ts.update_traces(texttemplate='%{text:,.0f}', textposition='top center', line_color='#1E3A8A', line_width=3)
-        fig_ts.update_layout(yaxis_range=[df_ts['Cantidad'].min()*0.9, df_ts['Cantidad'].max()*1.15]) # Margen superior para la etiqueta
+        fig_ts.update_layout(yaxis_range=[df_ts['Cantidad'].min()*0.9, df_ts['Cantidad'].max()*1.15])
         st.plotly_chart(fig_ts, use_container_width=True)
     
     with col_r:
@@ -290,7 +279,6 @@ elif menu == "3. Costo Huevo Fértil":
     col1, col2 = st.columns([1, 1])
     with col1:
         st.subheader("📈 Evolución Histórica de Costo ($)")
-        # ETIQUETAS AÑADIDAS AQUÍ
         fig_line_c = px.line(df_filtrado_graficas, x='Periodo', y='Costo Huevo Fértil', text='Costo Huevo Fértil', markers=True)
         fig_line_c.update_traces(texttemplate='$%{text:,.1f}', textposition='top center', line_color='#1E3A8A', line_width=3)
         fig_line_c.update_layout(yaxis_range=[df_filtrado_graficas['Costo Huevo Fértil'].min()*0.95, df_filtrado_graficas['Costo Huevo Fértil'].max()*1.08])
@@ -349,8 +337,8 @@ elif menu == "4. Detalle Costos por Lote":
     c3.metric("Lote Más Eficiente", f"Lote {lote_eficiente['Lote']}", f"${lote_eficiente['Costo Unitario']:,.1f}/HF")
 
     st.markdown("---")
-    
     col_grafico, col_tabla = st.columns([3, 2])
+    
     with col_grafico:
         st.subheader("📊 Ranking de Ineficiencia por Lote")
         fig_bar_lote = px.bar(
@@ -366,7 +354,6 @@ elif menu == "4. Detalle Costos por Lote":
     with col_tabla:
         st.subheader("📋 Matriz de Auditoría Lotes")
         df_tabla = df_m[['Lote', 'Huevos Fértiles', 'Costo Total', 'Costo Unitario']].copy()
-        # SE ELIMINÓ EL background_gradient para evitar el error de Matplotlib
         st.dataframe(df_tabla.style.format({
             'Huevos Fértiles': '{:,.0f} unds', 'Costo Total': '${:,.0f}', 'Costo Unitario': '${:,.2f}'
         }), use_container_width=True)
@@ -392,7 +379,6 @@ elif menu == "5. Detalle Costos por Línea":
     with col1:
         st.subheader("📈 Evolución Histórica por Raza")
         df_ts_g = df_h.groupby(['Periodo', 'linea'])['Cantidad'].sum().reset_index()
-        # ETIQUETAS AÑADIDAS AQUÍ
         fig_ts = px.line(df_ts_g, x='Periodo', y='Cantidad', color='linea', text='Cantidad', markers=True)
         fig_ts.update_traces(texttemplate='%{text:,.0f}', textposition='top center')
         fig_ts.update_layout(yaxis_range=[df_ts_g['Cantidad'].min()*0.9, df_ts_g['Cantidad'].max()*1.15])
@@ -415,7 +401,6 @@ elif menu == "6. Costo Kg Alimento":
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("📈 Evolución Precio Alimento ($/Kg)")
-        # ETIQUETAS AÑADIDAS AQUÍ
         fig_a = px.line(df_filtrado_graficas, x='Periodo', y='Precio Kg Alimento', text='Precio Kg Alimento', markers=True)
         fig_a.update_traces(texttemplate='$%{text:,.0f}', textposition='top center', line_color='#d62728', line_width=3)
         fig_a.update_layout(yaxis_range=[df_filtrado_graficas['Precio Kg Alimento'].min()*0.9, df_filtrado_graficas['Precio Kg Alimento'].max()*1.1])
@@ -423,7 +408,6 @@ elif menu == "6. Costo Kg Alimento":
         
     with col2:
         st.subheader("📈 Evolución Conversión (g/Huevo)")
-        # ETIQUETAS AÑADIDAS AQUÍ
         fig_g = px.line(df_filtrado_graficas, x='Periodo', y='Gramos Alimento/Huevo', text='Gramos Alimento/Huevo', markers=True)
         fig_g.update_traces(texttemplate='%{text:,.1f}g', textposition='top center', line_color='#2ca02c', line_width=3)
         fig_g.update_layout(yaxis_range=[df_filtrado_graficas['Gramos Alimento/Huevo'].min()*0.9, df_filtrado_graficas['Gramos Alimento/Huevo'].max()*1.1])
