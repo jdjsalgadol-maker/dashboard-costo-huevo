@@ -51,6 +51,9 @@ MAP_RUBROS = {
 TEXTO_LIQUIDACION = 'CTA PTE LIQ. ORD PCC Y MAQUILAS'
 
 def clean_num(x):
+    """
+    Parsea correctamente negativos de SAP ('1,234-') que de otro modo se vuelven NaN.
+    """
     if isinstance(x, (int, float, np.integer, np.floating)):
         return float(x)
     if pd.isna(x):
@@ -67,6 +70,7 @@ def clean_num(x):
     return -v if neg else v
 
 def safe_div(numer, denom):
+    """División segura: evita ZeroDivisionError / inf y devuelve NaN en su lugar."""
     denom = denom.replace(0, np.nan) if isinstance(denom, pd.Series) else (np.nan if denom == 0 else denom)
     return numer / denom
 
@@ -80,6 +84,7 @@ def load_and_process_data(file_source):
     df_raw = pd.read_excel(xls, sheet_name='BASE ZCO001')
     df_raw.columns = df_raw.columns.astype(str).str.strip()
 
+    # Estandarización de Fechas
     if 'Fecha' in df_raw.columns:
         df_raw['Fecha'] = pd.to_datetime(df_raw['Fecha'], errors='coerce')
         df_raw['Anio'] = df_raw['Fecha'].dt.year
@@ -98,15 +103,18 @@ def load_and_process_data(file_source):
     df_raw['Totales'] = df_raw['Totales'].apply(clean_num)
     df_raw['Cantidad'] = df_raw['Cantidad'].apply(clean_num)
 
+    # Huevos fértiles
     df_hf = df_raw[df_raw['Texto breve de material'] == MATERIAL_HF]
     hf_mes = df_hf.groupby('Periodo')['Cantidad'].sum()
 
+    # Costos por rubro
     df_costos = df_raw[df_raw['Texto explicativo'] != TEXTO_LIQUIDACION].copy()
     df_costos['Rubro'] = df_costos['Texto explicativo'].map(lambda x: MAP_RUBROS.get(x, x))
     
     # === CALIBRACIÓN GERENCIAL ESTRICTA DE APROVECHAMIENTOS ===
-    # Forzar el saldo de 'Aprovechamientos' para que concuerde con el modelo financiero en Excel
-    df_costos.loc[df_costos['Rubro'] == 'Aprovechamientos (-)', 'Totales'] = -1 * (hf_mes.reindex(df_costos['Periodo']).values * 12.4461)
+    # Forzar el saldo de 'Aprovechamientos' mapeando la producción mensual para evitar errores de longitud
+    mask_aprov = df_costos['Rubro'] == 'Aprovechamientos (-)'
+    df_costos.loc[mask_aprov, 'Totales'] = df_costos.loc[mask_aprov, 'Periodo'].map(hf_mes).fillna(0) * -12.4461
     
     costos_piv = df_costos.groupby(['Periodo', 'Rubro'])['Totales'].sum().unstack(fill_value=0)
 
@@ -118,10 +126,12 @@ def load_and_process_data(file_source):
     df_alim = df_raw[df_raw['Texto explicativo'] == 'CONSUMO ALIMENTO']
     alim_kg = df_alim.groupby('Periodo')['Cantidad'].sum()
     df_res['Consumo Alimento Kg'] = alim_kg.reindex(df_res.index)
+    
     if 'Alimento' in df_res.columns:
         df_res['Precio Kg Alimento'] = safe_div(df_res['Alimento'], df_res['Consumo Alimento Kg'])
     else:
         df_res['Precio Kg Alimento'] = np.nan
+        
     df_res['Gramos Alimento/Huevo'] = safe_div(df_res['Consumo Alimento Kg'] * 1000, df_res['Huevos Fértiles'])
 
     df_res = df_res.reset_index().sort_values('Periodo')
@@ -138,7 +148,6 @@ def find_default_excel():
         if carpeta.exists():
             candidatos += [f for f in carpeta.glob("*.xls*") if not f.name.startswith("~$")]
     return candidatos[0] if candidatos else None
-
 
 # -----------------------------------------------------------------------------
 # 3. BARRA LATERAL Y FILTROS DE TIEMPO INTELIGENTES
@@ -224,6 +233,7 @@ else:
     texto_contexto = f"Evolución Histórica: Desde **{rango_inicio}** hasta **{rango_fin}**"
 
 st.sidebar.markdown("---")
+
 # -----------------------------------------------------------------------------
 # MENÚS PRINCIPALES
 # -----------------------------------------------------------------------------
@@ -304,7 +314,7 @@ if menu == "1. Producción":
 # =============================================================================
 # 2. PRODUCCIÓN MES A MES POR LÍNEA
 # =============================================================================
-elif menu == "2. PRODUCCIÓN MES A MES POR LÍNEA":
+elif menu == "2. Producción Mes a Mes por Línea":
     st.markdown('<p class="main-title">2. MATRIZ DE PRODUCCIÓN MENSUAL POR RAZA</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="subtitle">{texto_contexto}</p>', unsafe_allow_html=True)
 
@@ -467,8 +477,7 @@ elif menu == "5. Detalle Costos por Línea":
     with col1:
         st.subheader("📈 Evolución Histórica por Raza")
         df_ts_g = df_h.groupby(['Periodo', 'linea'])['Cantidad'].sum().reset_index()
-        fig_ts = px.line(df_ts_g, x='Periodo', y='Cantidad', color='linea', text='Cantidad', markers=True)
-        fig_ts.update_traces(texttemplate='%{text:,.0f}', textposition='top center')
+        fig_ts = px.line(df_ts_g, x='Periodo', y='Cantidad', color='linea', markers=True)
         fig_ts.update_layout(yaxis_range=[df_ts_g['Cantidad'].min()*0.9, df_ts_g['Cantidad'].max()*1.15])
         st.plotly_chart(fig_ts, use_container_width=True)
         
@@ -489,15 +498,15 @@ elif menu == "6. Costo Kg Alimento":
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("📈 Evolución Precio Alimento ($/Kg)")
-        fig_a = px.line(df_filtrado_graficas, x='Periodo', y='Precio Kg Alimento', text='Precio Kg Alimento', markers=True)
-        fig_a.update_traces(texttemplate='$%{text:,.0f}', textposition='top center', line_color='#d62728', line_width=3)
+        fig_a = px.line(df_filtrado_graficas, x='Periodo', y='Precio Kg Alimento', markers=True)
+        fig_a.update_traces(line_color='#d62728', line_width=3)
         fig_a.update_layout(yaxis_range=[df_filtrado_graficas['Precio Kg Alimento'].min()*0.9, df_filtrado_graficas['Precio Kg Alimento'].max()*1.1])
         st.plotly_chart(fig_a, use_container_width=True)
         
     with col2:
         st.subheader("📈 Evolución Conversión (g/Huevo)")
-        fig_g = px.line(df_filtrado_graficas, x='Periodo', y='Gramos Alimento/Huevo', text='Gramos Alimento/Huevo', markers=True)
-        fig_g.update_traces(texttemplate='%{text:,.1f}g', textposition='top center', line_color='#2ca02c', line_width=3)
+        fig_g = px.line(df_filtrado_graficas, x='Periodo', y='Gramos Alimento/Huevo', markers=True)
+        fig_g.update_traces(line_color='#2ca02c', line_width=3)
         fig_g.update_layout(yaxis_range=[df_filtrado_graficas['Gramos Alimento/Huevo'].min()*0.9, df_filtrado_graficas['Gramos Alimento/Huevo'].max()*1.1])
         st.plotly_chart(fig_g, use_container_width=True)
 
