@@ -23,15 +23,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Estilos CSS personalizados para mejorar el aspecto visual ejecutivo
+# Estilos CSS personalizados (Corregido: unsafe_allow_html=True)
 st.markdown("""
     <style>
     .main-title { font-size: 28px; font-weight: bold; color: #1E3A8A; margin-bottom: 10px; }
     .subtitle { font-size: 16px; color: #4B5563; margin-bottom: 20px; }
     .kpi-card { background-color: #F3F4F6; padding: 15px; border-radius: 8px; border-left: 5px solid #1E3A8A; }
     </style>
-""", unsafe_allow_text_style=True)
-
+""", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # 2. CARGA Y PROCESAMIENTO DINÁMICO DE DATOS (ETL & INGESTIÓN)
@@ -107,7 +106,6 @@ def load_and_process_data(file_source):
         st.error("⚠️ Estructura no válida: La hoja 'BASE ZCO001' no fue encontrada en el archivo Excel.")
         st.stop()
 
-
 # -----------------------------------------------------------------------------
 # 3. CONTROL DE NAVEGACIÓN Y CARGA DE ARCHIVOS (SIDEBAR)
 # -----------------------------------------------------------------------------
@@ -158,7 +156,6 @@ menu = st.sidebar.radio(
     ]
 )
 
-
 # -----------------------------------------------------------------------------
 # MENÚ 1: PRODUCCIÓN 2026 (PROPIOS + EXTERNOS)
 # -----------------------------------------------------------------------------
@@ -166,14 +163,12 @@ if menu == "1. Producción 2026 (Propios + Externos)":
     st.markdown('<p class="main-title">📊 PRODUCCIÓN 2026 (Propios + Externos)</p>', unsafe_allow_html=True)
     st.markdown('<p class="subtitle">Análisis consolidado de la oferta de huevo fértil por fuente de abastecimiento y genética.</p>', unsafe_allow_html=True)
     
-    # Análisis de Negocio / Explicación cualitativa
     with st.expander("💡 **Interpretación Gerencial & Diagnóstico:**", expanded=True):
         st.write("""
         * **Autonomía de Producción:** La compañía mantiene un **59.0% de producción propia en granjas** ($29.46\,\text{M}$ de unidades) y recurre a **maquilas y compras externas en un 41.0%** ($20.47\,\text{M}$ de unidades) para cubrir el programa de incubación.
         * **Concentración de Genética:** Las razas **ROSS** ($47.4\%$) y **ROSSAP** ($35.7\%$) representan más del **83.1% del volumen total**, siendo las genéticas principales que sostienen la operación.
         """)
 
-    # KPIs Principales
     tot_propios = 29460823
     tot_externos = 20473164
     tot_general = tot_propios + tot_externos
@@ -186,7 +181,6 @@ if menu == "1. Producción 2026 (Propios + Externos)":
 
     st.markdown("---")
     
-    # Gráficos e visualizaciones
     col_chart, col_data = st.columns([3, 2])
     
     with col_chart:
@@ -213,7 +207,6 @@ if menu == "1. Producción 2026 (Propios + Externos)":
         st.subheader("📌 Matriz de Participación por Genética")
         st.dataframe(df_part.style.format({'Total 2026': '{:,.0f}', '% Part': '{:.2f}%'}), use_container_width=True)
 
-
 # -----------------------------------------------------------------------------
 # MENÚ 2: PRODUCCIÓN MES A MES POR LÍNEA
 # -----------------------------------------------------------------------------
@@ -221,7 +214,6 @@ elif menu == "2. Producción Mes a Mes por Línea":
     st.markdown('<p class="main-title">📈 PRODUCCIÓN MES A MES POR LÍNEA 2026</p>', unsafe_allow_html=True)
     st.markdown('<p class="subtitle">Evolución del volumen mensual por raza, comparando desempeño en granja.</p>', unsafe_allow_html=True)
     
-    # Extracción de datos de la base
     df_2026_hf = df_raw[(df_raw['EjMat'] == 2026) & (df_raw['Texto breve de material'] == 'HUEVO INCUBABLE')]
     piv_prod = df_2026_hf.groupby(['Mes', 'linea'])['Cantidad'].sum().unstack().fillna(0)
     
@@ -238,7 +230,6 @@ elif menu == "2. Producción Mes a Mes por Línea":
     
     st.subheader("Tabla de Datos Consolidada (Unidades):")
     st.dataframe(piv_prod.style.format('{:,.0f}'), use_container_width=True)
-
 
 # -----------------------------------------------------------------------------
 # MENÚ 3: COSTO HUEVO FÉRTIL (MACRO & VARIACIÓN VIF)
@@ -259,7 +250,6 @@ elif menu == "3. Costo Huevo Fértil (Macro)":
     df_a = df[df['Periodo'] == mes_a].iloc[0]
     var_tot = df_a['Costo Huevo Fértil'] - df_b['Costo Huevo Fértil']
     
-    # Tarjetas Métricas
     k1, k2, k3 = st.columns(3)
     k1.metric(f"Costo {mes_b}", f"${df_b['Costo Huevo Fértil']:,.2f}")
     k2.metric(f"Costo {mes_a}", f"${df_a['Costo Huevo Fértil']:,.2f}")
@@ -267,7 +257,6 @@ elif menu == "3. Costo Huevo Fértil (Macro)":
     
     st.markdown("---")
     
-    # Cálculo de Impacto
     impactos = {}
     for r in rubros_items:
         impactos[r] = (df_a[r] / df_a['Huevos Fértiles']) - (df_b[r] / df_b['Huevos Fértiles'])
@@ -281,7 +270,6 @@ elif menu == "3. Costo Huevo Fértil (Macro)":
         fig_imp.update_traces(text=[f"${v:+,.1f}" for v in df_imp['Impacto $/Huevo']], textposition='outside')
         st.plotly_chart(fig_imp, use_container_width=True)
     else:
-        # Waterfall con escala optimizada
         items_wf = list(impactos.keys())
         valores_wf = list(impactos.values())
         min_y = min(df_b['Costo Huevo Fértil'], df_a['Costo Huevo Fértil']) * 0.95
@@ -301,13 +289,11 @@ elif menu == "3. Costo Huevo Fértil (Macro)":
         fig_wf.update_layout(title="Descomposición en Cascada (Escala Recortada)", yaxis=dict(range=[min_y, max(df_b['Costo Huevo Fértil'], df_a['Costo Huevo Fértil']) * 1.05]), height=500)
         st.plotly_chart(fig_wf, use_container_width=True)
 
-    # Explicación cualitativa del incremento
     st.subheader("💡 Explicación Analítica de la Variación:")
     df_top_var = df_imp.sort_values('Impacto $/Huevo', ascending=False)
     for idx, row in df_top_var.head(3).iterrows():
         pct_exp = (row['Impacto $/Huevo'] / var_tot) * 100 if var_tot != 0 else 0
         st.markdown(f"* **{row['Rubro']}**: Aportó **${row['Impacto $/Huevo']:+,.2f} COP** al costo final (explica el **{pct_exp:.1f}%** del cambio total).")
-
 
 # -----------------------------------------------------------------------------
 # MENÚ 4: DETALLE COSTOS HUEVO POR LOTE
@@ -318,7 +304,6 @@ elif menu == "4. Detalle Costos Huevo por Lote":
     
     mes_sel = st.selectbox("Seleccionar Mes de Consulta (2026):", [6, 5, 4, 3, 2, 1], index=0)
     
-    # Filtrar datos de la base
     df_mes_lote = df_raw[(df_raw['EjMat'] == 2026) & (df_raw['Mes'] == mes_sel) & (df_raw['Texto explicativo'] != 'CTA PTE LIQ. ORD PCC Y MAQUILAS')]
     piv_lote = df_mes_lote.pivot_table(index='Texto explicativo', columns='Lote', values='Totales', aggfunc='sum').fillna(0)
     
@@ -335,7 +320,6 @@ elif menu == "4. Detalle Costos Huevo por Lote":
 
     st.subheader(f"Matriz de Costo Unitario ($/HF) - Mes {mes_sel} / 2026:")
     st.dataframe(piv_lote_unit.style.format('${:,.1f}'), use_container_width=True)
-
 
 # -----------------------------------------------------------------------------
 # MENÚ 5: DETALLE COSTOS HUEVO POR LÍNEA
@@ -359,7 +343,6 @@ elif menu == "5. Detalle Costos Huevo por Línea":
     st.plotly_chart(fig_gen, use_container_width=True)
     
     st.dataframe(df_gen.style.format({'Costo Total ($)': '${:,.0f}', 'Huevos Fértiles': '{:,.0f}', 'Costo / Huevo ($)': '${:,.2f}'}), use_container_width=True)
-
 
 # -----------------------------------------------------------------------------
 # MENÚ 6: COSTO KG ALIMENTO
@@ -398,9 +381,8 @@ elif menu == "6. Costo Kg Alimento":
     st.plotly_chart(fig_alim, use_container_width=True)
     st.dataframe(res_alim_df.style.format({2025: '${:,.1f}', 2026: '${:,.1f}', '%VAR': '{:+.2f}%'}), use_container_width=True)
 
-
 # -----------------------------------------------------------------------------
-# MENÚ 7: SIMULADOR WHAT-IF & PRORECCIÓN
+# MENÚ 7: SIMULADOR WHAT-IF & PROYECCIÓN
 # -----------------------------------------------------------------------------
 elif menu == "7. Simulador What-If & Proyección":
     st.markdown('<p class="main-title">🎛️ SIMULADOR DE ESCENARIOS & PROYECCIÓN</p>', unsafe_allow_html=True)
@@ -438,7 +420,6 @@ elif menu == "7. Simulador What-If & Proyección":
     kpi2.metric("Precio Venta Target", f"${precio_venta_target:,.2f}")
     kpi3.metric("Margen Unitario ($)", f"${margen_unitario:,.2f}", delta=f"{margen_pct:.1f}% Margen")
     kpi4.metric("Utilidad Total Est.", f"${(margen_unitario * huevos_fert_sim):,.0f}")
-
 
 # -----------------------------------------------------------------------------
 # MENÚ 8: CENTRO DE EXPORTACIÓN DE INFORMES
