@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -5,23 +6,25 @@ import plotly.express as px
 import plotly.graph_objects as go
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
-# Configuración de página
+# -----------------------------------------------------------------------------
+# CONFIGURACIÓN DE LA PÁGINA
+# -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Costo Huevo Fértil",
+    page_title="Control Ejecutivo - Costo Huevo Fértil",
     page_icon="🥚",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # -----------------------------------------------------------------------------
-# 1. CARGA Y PROCESAMIENTO DE DATOS
+# 1. CARGA Y PROCESAMIENTO DINÁMICO DE DATOS
 # -----------------------------------------------------------------------------
 @st.cache_data
-def load_data():
-    filepath = 'data/Juan_costo_del_huevo.xlsx'  # Asegúrate de poner la ruta correcta
-    raw_df = pd.read_excel(filepath, sheet_name='Hoja1', header=None)
+def load_data_from_file(file_source):
+    """Lee y limpia la estructura del Excel independientemente de su nombre."""
+    raw_df = pd.read_excel(file_source, sheet_name='Hoja1', header=None)
     
-    # Mapeo de columnas por fecha
+    # Mapeo de columnas por fecha en la primera fila
     fechas = []
     col_indices = []
     for col in range(2, raw_df.shape[1]):
@@ -30,7 +33,7 @@ def load_data():
             fechas.append(pd.to_datetime(val).strftime('%Y-%m'))
             col_indices.append(col)
             
-    # Conceptos de costos (Filas exactas del Excel)
+    # Conceptos de costos (Filas exactas según la estructura de la hoja)
     conceptos_filas = {
         'Arriendo': 1,
         'Cama - Cascarilla': 2,
@@ -67,27 +70,62 @@ def load_data():
     df = pd.DataFrame(data_costos)
     return df, list(conceptos_filas.keys())
 
-try:
-    df, rubros_items = load_data()
-except Exception as e:
-    st.error(f"Error cargando el archivo de datos: {e}")
-    st.stop()
-
 # -----------------------------------------------------------------------------
-# SIDEBAR / NAVEGACIÓN
+# CONTROL DE CARGA EN EL SIDEBAR
 # -----------------------------------------------------------------------------
 st.sidebar.title("🐔 Gestión Avícola")
+st.sidebar.subheader("📂 Carga de Datos")
+
+# Opción A: Carga interactiva Drag & Drop
+uploaded_file = st.sidebar.file_uploader("Sube cualquier archivo Excel (.xlsx / .xls)", type=["xlsx", "xls"])
+
+df = None
+rubros_items = None
+
+if uploaded_file is not None:
+    try:
+        df, rubros_items = load_data_from_file(uploaded_file)
+        st.sidebar.success(f"¡Cargado: `{uploaded_file.name}`!")
+    except Exception as e:
+        st.sidebar.error(f"Error procesando el archivo subido: {e}")
+        st.stop()
+else:
+    # Opción B: Búsqueda automática de cualquier .xlsx disponible en la raíz o /data
+    archivos_excel = [f for f in os.listdir('.') if (f.endswith('.xlsx') or f.endswith('.xls')) and not f.startswith('~$')]
+    if os.path.exists('data'):
+        archivos_excel += [os.path.join('data', f) for f in os.listdir('data') if (f.endswith('.xlsx') or f.endswith('.xls')) and not f.startswith('~$')]
+        
+    if archivos_excel:
+        archivo_encontrado = archivos_excel[0]
+        try:
+            df, rubros_items = load_data_from_file(archivo_encontrado)
+            st.sidebar.info(f"Cargado automático: `{archivo_encontrado}`")
+        except Exception as e:
+            st.sidebar.error(f"Error cargando `{archivo_encontrado}`: {e}")
+            st.stop()
+    else:
+        st.warning("⚠️ No se encontró ningún archivo Excel. Por favor, arrastra y suelta tu archivo en la barra lateral.")
+        st.stop()
+
+# -----------------------------------------------------------------------------
+# NAVEGACIÓN PRINCIPAL
+# -----------------------------------------------------------------------------
 menu = st.sidebar.radio(
     "Selecciona un Módulo:",
-    ["1. Análisis Variación (VIF Waterfall)", "2. Impacto por Item", "3. Simulador de Escenarios", "4. Proyección Futura"]
+    [
+        "1. Análisis Variación (VIF Waterfall)", 
+        "2. Impacto por Ítem", 
+        "3. Simulador de Escenarios (What-If)", 
+        "4. Proyección Futura"
+    ]
 )
 
 # -----------------------------------------------------------------------------
-# MÓDULO 1: ANÁLISIS DE VARIACIÓN DE COSTO (WHY IT WENT UP)
+# MÓDULO 1: ANÁLISIS DE VARIACIÓN INTERMENSUAL (WATERFALL)
 # -----------------------------------------------------------------------------
 if menu == "1. Análisis Variación (VIF Waterfall)":
-    st.header("🔍 Explicación de Variación de Costo Intermensual")
-    st.markdown("Analiza la razón exacta por la cual subió o bajó el costo por huevo fértil entre dos períodos seleccionados.")
+    st.header("🔍 Explicación de Variación del Costo por Huevo Fértil")
+    st.markdown("Identifica los rubros exactos que provocaron que el costo subiera o bajara entre dos períodos.")
     
     col1, col2 = st.columns(2)
     with col1:
@@ -101,52 +139,51 @@ if menu == "1. Análisis Variación (VIF Waterfall)":
         df_base = df[df['Periodo'] == mes_base].iloc[0]
         df_analisis = df[df['Periodo'] == mes_analisis].iloc[0]
         
-        # Calcular impacto unitario ($/huevo) de cada ítem
         huevo_base = df_base['Huevos Fértiles']
         huevo_analisis = df_analisis['Huevos Fértiles']
         
         costo_unit_base = df_base['Costo Huevo Fértil']
         costo_unit_analisis = df_analisis['Costo Huevo Fértil']
-        
         variacion_total = costo_unit_analisis - costo_unit_base
         
-        # Desglose de cambios por rubro expresado en $/huevo fértil
+        # Cálculo de impacto de cada rubro en $/huevo fértil
         impactos = {}
         for item in rubros_items:
             unit_b = df_base[item] / huevo_base
             unit_a = df_analisis[item] / huevo_analisis
             impactos[item] = unit_a - unit_b
             
-        # Preparar gráfico Waterfall
         items_waterfall = list(impactos.keys())
         valores_waterfall = list(impactos.values())
         
         fig = go.Figure(go.Waterfall(
-            name = "Variación", orientation = "v",
-            measure = ["absolute"] + ["relative"] * len(items_waterfall) + ["total"],
-            x = [f"Costo {mes_base}"] + items_waterfall + [f"Costo {mes_analisis}"],
-            textposition = "outside",
-            text = [f"${costo_unit_base:,.1f}"] + [f"{v:+.1f}" for v in valores_waterfall] + [f"${costo_unit_analisis:,.1f}"],
-            y = [costo_unit_base] + valores_waterfall + [0],
-            connector = {"line":{"color":"rgb(63, 63, 63)"}},
-            decreasing = {"marker":{"color":"#2ca02c"}},
-            increasing = {"marker":{"color":"#d62728"}},
-            totals = {"marker":{"color":"#1f77b4"}}
+            name="Variación", orientation="v",
+            measure=["absolute"] + ["relative"] * len(items_waterfall) + ["total"],
+            x=[f"Costo {mes_base}"] + items_waterfall + [f"Costo {mes_analisis}"],
+            textposition="outside",
+            text=[f"${costo_unit_base:,.1f}"] + [f"{v:+.1f}" for v in valores_waterfall] + [f"${costo_unit_analisis:,.1f}"],
+            y=[costo_unit_base] + valores_waterfall + [0],
+            connector={"line":{"color":"rgb(63, 63, 63)"}},
+            decreasing={"marker":{"color":"#2ca02c"}},
+            increasing={"marker":{"color":"#d62728"}},
+            totals={"marker":{"color":"#1f77b4"}}
         ))
         
-        fig.update_layout(title=f"Descomposición de Variación: ${costo_unit_base:,.2f} ➔ ${costo_unit_analisis:,.2f} COP/Huevo (Variación: ${variacion_total:+,.2f})", height=550)
+        fig.update_layout(
+            title=f"Descomposición del Cambio: ${costo_unit_base:,.2f} ➔ ${costo_unit_analisis:,.2f} COP/Huevo (Variación: ${variacion_total:+,.2f})",
+            height=550
+        )
         st.plotly_chart(fig, use_container_width=True)
         
-        # Resumen de principales culpables
         df_imp = pd.DataFrame(list(impactos.items()), columns=['Rubro', 'Impacto $/Huevo']).sort_values(by='Impacto $/Huevo', ascending=False)
-        st.subheader("Top Factores que Encarecieron el Huevo:")
+        st.subheader("Top Rubros que Encarecieron el Huevo:")
         st.dataframe(df_imp.head(3).style.format({'Impacto $/Huevo': '${:+.2f}'}), use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# MÓDULO 2: OPCIÓN DE IMPACTO POR ITEM
+# MÓDULO 2: OPCIÓN DE IMPACTO POR ÍTEM
 # -----------------------------------------------------------------------------
-elif menu == "2. Impacto por Item":
-    st.header("📊 Estructura de Costos y Matriz de Impacto")
+elif menu == "2. Impacto por Ítem":
+    st.header("📊 Estructura de Costos y Participación por Rubro")
     mes_sel = st.selectbox("Selecciona Período:", df['Periodo'].tolist(), index=len(df)-1)
     
     df_mes = df[df['Periodo'] == mes_sel].iloc[0]
@@ -175,14 +212,14 @@ elif menu == "2. Impacto por Item":
 # -----------------------------------------------------------------------------
 # MÓDULO 3: SIMULADOR DE ESCENARIOS Y MARGEN (WHAT-IF)
 # -----------------------------------------------------------------------------
-elif menu == "3. Simulador de Escenarios":
+elif menu == "3. Simulador de Escenarios (What-If)":
     st.header("🎛️ Simulador de Sensibilidad y Nuevo Margen")
-    st.markdown("Modifica los parámetros operativos para calcular en tiempo real el nuevo costo del huevo y el margen esperado.")
+    st.markdown("Ajusta las variables operativas para simular un nuevo escenario y recalcular en tiempo real el costo unitario y el margen.")
     
-    mes_ref = st.selectbox("Seleccionar Mes de Referencia para Simulación:", df['Periodo'].tolist(), index=len(df)-1)
+    mes_ref = st.selectbox("Seleccionar Mes Base para la Simulación:", df['Periodo'].tolist(), index=len(df)-1)
     df_ref = df[df['Periodo'] == mes_ref].iloc[0]
     
-    st.subheader("1. Parámetros Simulados")
+    st.subheader("1. Modificar Parámetros Operativos")
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -194,15 +231,13 @@ elif menu == "3. Simulador de Escenarios":
     with col4:
         precio_venta_target = st.number_input("Precio Venta Huevo Fértil ($):", value=1600.0, step=10.0)
 
-    # RECÁLCULO DEL ESCENARIO
+    # RE-CÁLCULO DEL ESCENARIO
     prod_total = df_ref['Total Producción']
     huevos_fert_sim = prod_total * (fertilidad_sim / 100.0)
     
-    # Recálculo de costo de alimento
     kg_alimento_sim = (prod_total * gramos_huevo_sim) / 1000.0
     costo_alimento_sim = kg_alimento_sim * precio_alimento_sim
     
-    # Otros costos constantes
     otros_costos = df_ref['Costo Total'] - df_ref['Alimento']
     costo_total_sim = otros_costos + costo_alimento_sim
     
@@ -213,41 +248,38 @@ elif menu == "3. Simulador de Escenarios":
     margen_pct = (margen_unitario / precio_venta_target) * 100
     
     st.markdown("---")
-    st.subheader("2. Resultados del Escenario Simulado")
+    st.subheader("2. Resultado Proyectado del Nuevo Escenario")
     
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     kpi1.metric("Costo Huevo Simulado", f"${costo_huevo_sim:,.2f}", delta=f"{costo_huevo_sim - costo_huevo_orig:+,.2f} COP", delta_color="inverse")
-    kpi2.metric("Precio Venta Proyectado", f"${precio_venta_target:,.2f}")
+    kpi2.metric("Precio Venta Huevo", f"${precio_venta_target:,.2f}")
     kpi3.metric("Margen Unitario ($)", f"${margen_unitario:,.2f}", delta=f"{margen_pct:.1f}% Margen")
-    kpi4.metric("Utilidad Total Proyectada", f"${(margen_unitario * huevos_fert_sim):,.0f}")
+    kpi4.metric("Utilidad Total Est.", f"${(margen_unitario * huevos_fert_sim):,.0f}")
 
 # -----------------------------------------------------------------------------
-# MÓDULO 4: SLIDE DE PROYECIÓN FUTURA
+# MÓDULO 4: PROYECCIÓN FUTURA
 # -----------------------------------------------------------------------------
 elif menu == "4. Proyección Futura":
-    st.header("🔮 Proyección Futura (Siguientes Meses)")
-    st.markdown("Modelado de series de tiempo para estimar la tendencia del costo por huevo fértil en los próximos períodos.")
+    st.header("🔮 Proyección Futura del Costo")
+    st.markdown("Estimación del comportamiento del costo por huevo fértil en los próximos meses usando suavizado exponencial.")
     
     meses_proyeccion = st.slider("Meses a Proyectar hacia el futuro:", 1, 6, 3)
     
-    # Modelo Holt-Winters / Exponential Smoothing
     ts_data = df['Costo Huevo Fértil'].values
     model = ExponentialSmoothing(ts_data, trend='add', seasonal=None).fit()
     forecast = model.forecast(meses_proyeccion)
     
-    # Fechas futuras
     ult_fecha = pd.to_datetime(df['Periodo'].iloc[-1])
-    fechas_futuras = [ (ult_fecha + pd.DateOffset(months=i)).strftime('%Y-%m') for i in range(1, meses_proyeccion + 1) ]
+    fechas_futuras = [(ult_fecha + pd.DateOffset(months=i)).strftime('%Y-%m') for i in range(1, meses_proyeccion + 1)]
     
     df_proj = pd.DataFrame({'Periodo': fechas_futuras, 'Costo Proyectado': forecast})
     
-    # Gráfico de Líneas con Proyección
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df['Periodo'], y=df['Costo Huevo Fértil'], mode='lines+markers', name='Histórico Real', line=dict(color='#1f77b4', width=3)))
     fig.add_trace(go.Scatter(x=df_proj['Periodo'], y=df_proj['Costo Proyectado'], mode='lines+markers', name='Proyección Futura', line=dict(color='#d62728', width=3, dash='dash')))
     
-    fig.update_layout(title="Proyección de Costo por Huevo Fértil ($ COP)", xaxis_title="Período", yaxis_title="Costo/Huevo ($)", height=500)
+    fig.update_layout(title="Tendencia y Proyección de Costo por Huevo Fértil ($ COP)", xaxis_title="Período", yaxis_title="Costo/Huevo ($)", height=500)
     st.plotly_chart(fig, use_container_width=True)
     
-    st.subheader("Valores Estimados de la Proyección:")
+    st.subheader("Valores Estimados Proyectados:")
     st.dataframe(df_proj.style.format({'Costo Proyectado': '${:,.2f}'}), use_container_width=True)
