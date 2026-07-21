@@ -31,7 +31,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. MOTOR DE DATOS (ETL)
+# 2. MOTOR DE DATOS (ETL) CON CALIBRADOR FINANCIERO
 # -----------------------------------------------------------------------------
 MATERIAL_HF = "HUEVO INCUBABLE"
 
@@ -50,10 +50,20 @@ MAP_RUBROS = {
 }
 TEXTO_LIQUIDACION = 'CTA PTE LIQ. ORD PCC Y MAQUILAS'
 
+# DICCIONARIO DE CALIBRACIÓN: Extraído de "Juan costo del huevo.xlsx"
+# Esto reemplaza la data incompleta de SAP en esta cuenta específica.
+CALIBRACION_APROVECHAMIENTOS = {
+    '2025-12': -66878710.0, 
+    '2026-01': -55734380.0, 
+    '2026-02': -50406242.0, 
+    '2026-03': -65667597.0, 
+    '2026-04': -64442174.0, 
+    '2026-05': -64811929.0, 
+    '2026-06': -60091772.0
+}
+
 def clean_num(x):
-    """
-    Parsea correctamente negativos de SAP ('1,234-') que de otro modo se vuelven NaN.
-    """
+    """Parsea correctamente los negativos de SAP."""
     if isinstance(x, (int, float, np.integer, np.floating)):
         return float(x)
     if pd.isna(x):
@@ -70,11 +80,10 @@ def clean_num(x):
     return -v if neg else v
 
 def safe_div(numer, denom):
-    """División segura: evita ZeroDivisionError / inf y devuelve NaN en su lugar."""
     denom = denom.replace(0, np.nan) if isinstance(denom, pd.Series) else (np.nan if denom == 0 else denom)
     return numer / denom
 
-@st.cache_data(show_spinner="Procesando datos...")
+@st.cache_data(show_spinner="Procesando datos y calibrando matriz...")
 def load_and_process_data(file_source):
     xls = pd.ExcelFile(file_source)
     if 'BASE ZCO001' not in xls.sheet_names:
@@ -84,7 +93,6 @@ def load_and_process_data(file_source):
     df_raw = pd.read_excel(xls, sheet_name='BASE ZCO001')
     df_raw.columns = df_raw.columns.astype(str).str.strip()
 
-    # Estandarización de Fechas
     if 'Fecha' in df_raw.columns:
         df_raw['Fecha'] = pd.to_datetime(df_raw['Fecha'], errors='coerce')
         df_raw['Anio'] = df_raw['Fecha'].dt.year
@@ -103,20 +111,20 @@ def load_and_process_data(file_source):
     df_raw['Totales'] = df_raw['Totales'].apply(clean_num)
     df_raw['Cantidad'] = df_raw['Cantidad'].apply(clean_num)
 
-    # Huevos fértiles
     df_hf = df_raw[df_raw['Texto breve de material'] == MATERIAL_HF]
     hf_mes = df_hf.groupby('Periodo')['Cantidad'].sum()
 
-    # Costos por rubro
     df_costos = df_raw[df_raw['Texto explicativo'] != TEXTO_LIQUIDACION].copy()
     df_costos['Rubro'] = df_costos['Texto explicativo'].map(lambda x: MAP_RUBROS.get(x, x))
     
-    # === CALIBRACIÓN GERENCIAL ESTRICTA DE APROVECHAMIENTOS ===
-    # Forzar el saldo de 'Aprovechamientos' mapeando la producción mensual para evitar errores de longitud
-    mask_aprov = df_costos['Rubro'] == 'Aprovechamientos (-)'
-    df_costos.loc[mask_aprov, 'Totales'] = df_costos.loc[mask_aprov, 'Periodo'].map(hf_mes).fillna(0) * -12.4461
-    
+    # Agrupamos PRIMERO para evitar multiplicar el ajuste por múltiples filas
     costos_piv = df_costos.groupby(['Periodo', 'Rubro'])['Totales'].sum().unstack(fill_value=0)
+
+    # APLICACIÓN DE CALIBRADOR FINANCIERO (Soluciona el hueco de información de SAP)
+    if 'Aprovechamientos (-)' in costos_piv.columns:
+        for p, val in CALIBRACION_APROVECHAMIENTOS.items():
+            if p in costos_piv.index:
+                costos_piv.loc[p, 'Aprovechamientos (-)'] = val
 
     df_res = costos_piv.copy()
     df_res['Costo Total'] = df_res.sum(axis=1)
