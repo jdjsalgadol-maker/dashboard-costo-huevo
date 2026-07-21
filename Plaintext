@@ -1,8 +1,8 @@
-dashboard-costo-huevo/
-│
-├── .streamlit/
-│   └── config.toml          <-- (Opcional) Configuración de tema visual
-├── data/
-│   └── Juan_costo_del_huevo.xlsx <-- Tu base de datos
-├── app.py                   <-- Script principal del Dashboard
-└── requirements.txt         <-- Librerías requeridas
+📌 BARRA LATERAL (MENÚ DE NAVEGACIÓN)
+ ├── 1. 📈 Producción Mes a Mes por Línea (Propios + Externos)
+ ├── 2. 🥚 Costo Huevo Fértil (Macro & Variación VIF)
+ ├── 3. 🔍 Detalle de Costos por Lote (Matriz por Edad)
+ ├── 4. 🧬 Detalle de Costos por Línea Genética
+ ├── 5. 🌾 Costo Kg Alimento & Eficiencia Nutricional
+ ├── 6. 🎛️ Simulador What-If & Proyección Futura
+ └── 📥 Centro de Exportación (Excel & Reportes PDF)
