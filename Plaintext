@@ -1,0 +1,8 @@
+dashboard-costo-huevo/
+│
+├── .streamlit/
+│   └── config.toml          <-- (Opcional) Configuración de tema visual
+├── data/
+│   └── Juan_costo_del_huevo.xlsx <-- Tu base de datos
+├── app.py                   <-- Script principal del Dashboard
+└── requirements.txt         <-- Librerías requeridas
