@@ -29,7 +29,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. MOTOR DE DATOS (ETL) - CALIBRACIÓN FINANCIERA EXACTA
+# 2. MOTOR DE DATOS (ETL) CON CALIBRACIÓN FINANCIERA EXACTA
 # -----------------------------------------------------------------------------
 @st.cache_data
 def load_and_process_data(file_source):
@@ -68,10 +68,10 @@ def load_and_process_data(file_source):
         'DIFERENCIA EN PRECIO PRODUCTOS SEMIELABO': 'Aprovechamientos (-)'
     }
     
+    # Producción exacta basada en material 'HUEVO INCUBABLE'
     df_hf = df_raw[df_raw['Texto breve de material'] == 'HUEVO INCUBABLE']
     hf_mes = df_hf.groupby('Periodo')['Cantidad'].sum()
     
-    # Procesamiento estricto de costos operativos y liquidación
     df_costos = df_raw[df_raw['Texto explicativo'].isin(map_rubros.keys())].copy()
     df_costos['Rubro'] = df_costos['Texto explicativo'].map(map_rubros)
     
