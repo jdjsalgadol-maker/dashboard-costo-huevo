@@ -347,6 +347,7 @@ elif menu == "4. Detalle Costos por Lote":
     st.markdown('<p class="main-title">4. DIAGNÓSTICO MICRO-OPERATIVO POR LOTE</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="subtitle">{texto_contexto} - Análisis del período Actual ({p_actual})</p>', unsafe_allow_html=True)
     
+    # 1. Extracción y procesamiento de datos del mes actual
     df_l = df_raw[(df_raw['Periodo'] == p_actual)]
     df_c = df_l[df_l['Texto explicativo'] != 'CTA PTE LIQ. ORD PCC Y MAQUILAS'].groupby('Lote')['Totales'].sum()
     df_h = df_l[df_l['Texto breve de material'] == 'HUEVO INCUBABLE'].groupby('Lote')['Cantidad'].sum()
@@ -354,21 +355,74 @@ elif menu == "4. Detalle Costos por Lote":
     df_m = pd.DataFrame({'Costo Total': df_c, 'Huevos Fértiles': df_h}).dropna()
     df_m['Costo Unitario'] = df_m['Costo Total'] / df_m['Huevos Fértiles']
     df_m = df_m[df_m['Huevos Fértiles'] > 0].reset_index()
+    df_m['Lote'] = df_m['Lote'].astype(int).astype(str) # Convertir a texto para mejor visualización
     
-    lote_min = df_m.loc[df_m['Costo Unitario'].idxmin()]
-    lote_max = df_m.loc[df_m['Costo Unitario'].idxmax()]
+    # Ordenar de mayor a menor costo para el ranking
+    df_m = df_m.sort_values('Costo Unitario', ascending=False)
     
+    # Cálculos clave
+    lote_critico = df_m.iloc[0]
+    lote_eficiente = df_m.iloc[-1]
+    promedio_mes = df_m['Costo Total'].sum() / df_m['Huevos Fértiles'].sum()
+    
+    # 2. Análisis e Insights Automáticos
     st.markdown(f"""
-    <div class="insight-box">
-        💡 <b>Auditoría Operativa:</b> El <b>Lote {int(lote_min['Lote'])}</b> presenta la mayor eficiencia (${lote_min['Costo Unitario']:,.1f}/HF). En contraste, se sugiere auditar el <b>Lote {int(lote_max['Lote'])}</b> (${lote_max['Costo Unitario']:,.1f}/HF) para evaluar viabilidad financiera por agotamiento.
+    <div class="alert-box">
+        🚨 <b>Auditoría de Ineficiencia y Causa Raíz:</b><br>
+        El <b>Lote {lote_critico['Lote']}</b> es el punto crítico de la operación este mes, con un costo unitario de <b>${lote_critico['Costo Unitario']:,.1f} COP/HF</b> (muy por encima del promedio de ${promedio_mes:,.1f}).<br>
+        <i>¿Por qué sucede esto?</i> Este lote produjo un volumen muy bajo ({lote_critico['Huevos Fértiles']:,.0f} huevos), lo que provoca que los costos fijos de la granja (depreciación de la gallina, mano de obra e instalaciones) se dividan entre muy pocas unidades, disparando el costo. <b>Se recomienda evaluar este lote para descarte por agotamiento de curva de postura.</b><br><br>
+        ✅ En contraste, el <b>Lote {lote_eficiente['Lote']}</b> sostiene la rentabilidad con una alta producción ({lote_eficiente['Huevos Fértiles']:,.0f} huevos) y un costo óptimo de <b>${lote_eficiente['Costo Unitario']:,.1f} COP/HF</b>.
     </div>
     """, unsafe_allow_html=True)
 
-    st.subheader("📌 Matriz de Rentabilidad (Costo vs Producción por Lote)")
-    fig_scatter = px.scatter(df_m, x='Huevos Fértiles', y='Costo Unitario', text='Lote', size='Costo Total',
-                             color='Costo Unitario', color_continuous_scale='RdYlGn_r')
-    fig_scatter.update_traces(textposition='top center', marker=dict(size=14))
-    st.plotly_chart(fig_scatter, use_container_width=True)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Lote Crítico (Mayor Costo)", f"Lote {lote_critico['Lote']}", f"${lote_critico['Costo Unitario']:,.1f}/HF", delta_color="inverse")
+    c2.metric("Promedio Ponderado del Mes", f"Total Granjas", f"${promedio_mes:,.1f}/HF", delta_color="off")
+    c3.metric("Lote Más Eficiente", f"Lote {lote_eficiente['Lote']}", f"${lote_eficiente['Costo Unitario']:,.1f}/HF")
+
+    st.markdown("---")
+    
+    col_grafico, col_tabla = st.columns([3, 2])
+    
+    with col_grafico:
+        st.subheader("📊 Ranking de Costo Unitario por Lote")
+        
+        # Crear gráfico de barras ordenado
+        fig_bar_lote = px.bar(
+            df_m, 
+            x='Lote', 
+            y='Costo Unitario',
+            text_auto='.1f',
+            color='Costo Unitario',
+            color_continuous_scale='RdYlGn_r', # Rojo para los más caros, Verde para los baratos
+            title="Comparativo Directo de Costo ($/Huevo Fértil)"
+        )
+        
+        # Agregar línea de promedio
+        fig_bar_lote.add_hline(
+            y=promedio_mes, 
+            line_dash="dot", 
+            annotation_text=f"Promedio Mes: ${promedio_mes:,.1f}", 
+            annotation_position="bottom right",
+            line_color="black"
+        )
+        
+        fig_bar_lote.update_traces(textposition='outside')
+        fig_bar_lote.update_layout(yaxis_title="Costo Unitario ($ COP)", xaxis_title="Número de Lote")
+        st.plotly_chart(fig_bar_lote, use_container_width=True)
+
+    with col_tabla:
+        st.subheader("📋 Matriz de Costos por Lote")
+        st.info("Visualiza el volumen producido frente a los gastos absorbidos.")
+        
+        # Formatear la tabla para la alta gerencia
+        df_tabla = df_m[['Lote', 'Huevos Fértiles', 'Costo Total', 'Costo Unitario']].copy()
+        
+        st.dataframe(df_tabla.style.format({
+            'Huevos Fértiles': '{:,.0f} unds',
+            'Costo Total': '${:,.0f}',
+            'Costo Unitario': '${:,.2f}'
+        }).background_gradient(subset=['Costo Unitario'], cmap='Reds'), use_container_width=True)
 
 # -----------------------------------------------------------------------------
 # MENÚ 5: DETALLE COSTOS POR LÍNEA
