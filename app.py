@@ -23,8 +23,6 @@ st.markdown("""
     .stMetric { background-color: #F8FAFC; padding: 15px; border-radius: 8px; border-left: 5px solid #1E3A8A; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
     .insight-box { background-color: #ECFDF5; padding: 15px; border-left: 5px solid #10B981; border-radius: 5px; margin-bottom: 20px; color: #064E3B;}
     .alert-box { background-color: #FEF2F2; padding: 15px; border-left: 5px solid #EF4444; border-radius: 5px; margin-bottom: 20px; color: #7F1D1D;}
-    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; font-weight: 600; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -41,6 +39,7 @@ def load_and_process_data(file_source):
     df_raw = pd.read_excel(xls, sheet_name='BASE ZCO001')
     df_raw.columns = df_raw.columns.astype(str).str.strip()
     
+    # Estandarización de Fechas
     if 'Fecha' in df_raw.columns:
         df_raw['Fecha'] = pd.to_datetime(df_raw['Fecha'])
         df_raw['Anio'] = df_raw['Fecha'].dt.year
@@ -53,6 +52,7 @@ def load_and_process_data(file_source):
     df_raw['Totales'] = pd.to_numeric(df_raw['Totales'], errors='coerce').fillna(0)
     df_raw['Cantidad'] = pd.to_numeric(df_raw['Cantidad'], errors='coerce').fillna(0)
     
+    # Homologación contable a conceptos gerenciales
     map_rubros = {
         'CONSUMO ALIMENTO': 'Alimento',
         'PP Depr. Gallina Grj.Pcc.': 'Depreciación Parvada',
@@ -67,6 +67,7 @@ def load_and_process_data(file_source):
         'DIFERENCIA EN PRECIO PRODUCTOS SEMIELABO': 'Aprovechamientos (-)'
     }
     
+    # KPIs Base y Costos
     df_hf = df_raw[df_raw['Texto breve de material'] == 'HUEVO INCUBABLE']
     hf_mes = df_hf.groupby('Periodo')['Cantidad'].sum()
     
@@ -79,6 +80,7 @@ def load_and_process_data(file_source):
     df_res['Huevos Fértiles'] = hf_mes
     df_res['Costo Huevo Fértil'] = df_res['Costo Total'] / df_res['Huevos Fértiles']
     
+    # KPIs de Alimento
     df_alim = df_raw[df_raw['Texto explicativo'] == 'CONSUMO ALIMENTO']
     alim_kg = df_alim.groupby('Periodo')['Cantidad'].sum()
     df_res['Consumo Alimento Kg'] = alim_kg
@@ -136,7 +138,7 @@ if modo_analisis == "⚖️ Comparativo (Mes VS Mes)":
     p_base = f"{anio_b}-{str(mes_b).zfill(2)}"
     p_actual = f"{anio_a}-{str(mes_a).zfill(2)}"
     
-    # Filtro aplicado a los datos
+    # Lógica de Filtrado Exclusivo para Comparativa
     df_filtrado = df[df['Periodo'].isin([p_base, p_actual])].sort_values('Periodo')
     df_raw_f = df_raw[df_raw['Periodo'].isin([p_base, p_actual])]
     texto_contexto = f"Comparativa Estratégica: **{meses_nombres[mes_a]} {anio_a}** VS **{meses_nombres[mes_b]} {anio_b}**"
@@ -155,13 +157,15 @@ else:
     p_base = f"{anio_i}-{str(mes_i).zfill(2)}"
     p_actual = f"{anio_f}-{str(mes_f).zfill(2)}"
     
-    # Filtro aplicado a los datos
+    # Lógica de Filtrado para Rango Histórico
     df_filtrado = df[(df['Periodo'] >= p_base) & (df['Periodo'] <= p_actual)].sort_values('Periodo')
     df_raw_f = df_raw[(df_raw['Periodo'] >= p_base) & (df_raw['Periodo'] <= p_actual)]
     texto_contexto = f"Evolución Histórica: Desde **{p_base}** hasta **{p_actual}**"
 
 st.sidebar.markdown("---")
-# LOS 6 INFORMES SOLICITADOS
+# -----------------------------------------------------------------------------
+# MENÚS PRINCIPALES
+# -----------------------------------------------------------------------------
 menu = st.sidebar.radio(
     "Seleccione el Tablero Directivo:",
     [
@@ -191,15 +195,16 @@ def generar_diagnostico_costos(df_impactos, var_total, p_actual, p_base):
     if rubro_critico == "Alimento":
         recomendacion = "⚠️ <b>Factor Crítico - Alimento:</b> <i>¿Por qué subió?</i> Incremento en precio de mercado de materias primas o deterioro en la conversión alimenticia. <i>¿Qué hacer?</i> Evaluar formulación nutricional, revisar desperdicios en comederos y negociar compras a futuro."
     elif rubro_critico == "Depreciación Parvada":
-        recomendacion = "⚠️ <b>Factor Crítico - Edad / Postura:</b> <i>¿Por qué subió?</i> La amortización contable por huevo se disparó. Ocurre cuando los lotes superan las 60 semanas y el % de postura cae, encareciendo el huevo resultante. <i>¿Qué hacer?</i> Acelerar programa de descartes en lotes improductivos."
+        recomendacion = "⚠️ <b>Factor Crítico - Edad / Postura:</b> <i>¿Por qué subió?</i> La amortización contable por huevo se disparó. Ocurre cuando los lotes superan las 60 semanas y el % de postura cae. <i>¿Qué hacer?</i> Acelerar programa de descartes en lotes improductivos."
     else:
         recomendacion = f"⚠️ <b>Factor Crítico - {rubro_critico}:</b> Explicó el <b>{pct_explicado:.1f}%</b> de la desviación desfavorable. Requiere revisión inmediata de presupuestos."
 
     return f"""<div class="alert-box">🚨 <b>Alerta de Desviación Financiera (+${var_total:,.2f} COP/Huevo):</b><br>{recomendacion}</div>"""
 
-# -----------------------------------------------------------------------------
-# MENÚ 1: PRODUCCIÓN
-# -----------------------------------------------------------------------------
+
+# =============================================================================
+# 1. PRODUCCIÓN
+# =============================================================================
 if menu == "1. Producción":
     st.markdown('<p class="main-title">1. PRODUCCIÓN CONSOLIDADA DE HUEVO FÉRTIL</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="subtitle">{texto_contexto}</p>', unsafe_allow_html=True)
@@ -220,9 +225,9 @@ if menu == "1. Producción":
     col_l, col_r = st.columns([2, 1])
     with col_l:
         st.subheader("📈 Evolución Histórica de Producción")
-        # Corrección: Ahora apunta a df_raw_f para que respete el slider temporal
-        df_ts = df_raw_f[df_raw_f['Texto breve de material'] == 'HUEVO INCUBABLE'].groupby('Periodo')['Cantidad'].sum().reset_index()
-        fig_ts = px.line(df_ts, x='Periodo', y='Cantidad', markers=True, title="Comportamiento del Volumen en el Tiempo")
+        # Gráfico dinámico anclado al filtro de tiempo
+        df_ts = df_hf_f.groupby('Periodo')['Cantidad'].sum().reset_index()
+        fig_ts = px.line(df_ts, x='Periodo', y='Cantidad', markers=True, title="Comportamiento del Volumen en el Rango Seleccionado")
         fig_ts.update_traces(line_color='#1E3A8A', line_width=3)
         st.plotly_chart(fig_ts, use_container_width=True)
     
@@ -232,9 +237,10 @@ if menu == "1. Producción":
         fig_pie = px.pie(df_gen, values='Cantidad', names='linea', hole=0.4, title="Participación por Raza")
         st.plotly_chart(fig_pie, use_container_width=True)
 
-# -----------------------------------------------------------------------------
-# MENÚ 2: PRODUCCIÓN MES A MES POR LÍNEA
-# -----------------------------------------------------------------------------
+
+# =============================================================================
+# 2. PRODUCCIÓN MES A MES POR LÍNEA
+# =============================================================================
 elif menu == "2. Producción Mes a Mes por Línea":
     st.markdown('<p class="main-title">2. MATRIZ DE PRODUCCIÓN MENSUAL POR RAZA</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="subtitle">{texto_contexto}</p>', unsafe_allow_html=True)
@@ -248,19 +254,20 @@ elif menu == "2. Producción Mes a Mes por Línea":
     st.subheader("Matriz Exacta de Producción (Unidades):")
     st.dataframe(piv_prod.style.format('{:,.0f}'), use_container_width=True)
 
-# -----------------------------------------------------------------------------
-# MENÚ 3: COSTO HUEVO FÉRTIL (VIF & SIMULADOR & TABLA EVOLUTIVA)
-# -----------------------------------------------------------------------------
+
+# =============================================================================
+# 3. COSTO HUEVO FÉRTIL (VIF, EVOLUTIVA & SIMULADOR)
+# =============================================================================
 elif menu == "3. Costo Huevo Fértil":
     st.markdown('<p class="main-title">3. ANÁLISIS INTEGRAL: COSTO HUEVO FÉRTIL Y DESVIACIONES</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="subtitle">Análisis de {p_actual} frente a la base {p_base}</p>', unsafe_allow_html=True)
     
     if p_base == p_actual:
-        st.warning("⚠️ Para el análisis VIF, por favor selecciona en la barra lateral el modo 'Comparativo' con dos períodos distintos o un rango de meses.")
+        st.warning("⚠️ Selecciona un Rango de Meses o el Modo Comparativo con dos períodos distintos en la barra lateral.")
         st.stop()
         
     try:
-        # Extraemos la base y actual directamente del dataset sin importar el modo
+        # Se toma directamente de 'df' (base completa) para que siempre existan los periodos comparables sin importar el modo
         df_b = df[df['Periodo'] == p_base].iloc[0]
         df_a = df[df['Periodo'] == p_actual].iloc[0]
     except:
@@ -274,7 +281,7 @@ elif menu == "3. Costo Huevo Fértil":
     c2.metric(f"Costo {p_actual} (Actual)", f"${df_a['Costo Huevo Fértil']:,.2f}")
     c3.metric("Desviación Total ($/HF)", f"${var_tot:+,.2f}", delta=f"{(var_tot/df_b['Costo Huevo Fértil'])*100:+.1f}%", delta_color="inverse")
     
-    # 1. Diagnóstico Automático VIF
+    # 1. Diagnóstico VIF
     filas = []
     for r in rubros_items:
         ub = df_b[r] / df_b['Huevos Fértiles']
@@ -284,7 +291,7 @@ elif menu == "3. Costo Huevo Fértil":
     
     st.markdown(generar_diagnostico_costos(df_vif.sort_values('Impacto ($/HF)'), var_tot, p_actual, p_base), unsafe_allow_html=True)
     
-    # 2. Gráficos dinámicos (Corrección de df a df_filtrado)
+    # 2. Gráficos dinámicos anclados a df_filtrado
     col1, col2 = st.columns([1, 1])
     with col1:
         st.subheader("📈 Evolución Histórica de Costo ($)")
@@ -299,12 +306,9 @@ elif menu == "3. Costo Huevo Fértil":
     
     st.markdown("---")
     
-    # 3. TABLA DE EVOLUCIÓN MENSUAL DEL COSTO (Agregada según solicitud)
+    # 3. TABLA DE EVOLUCIÓN MENSUAL DEL COSTO
     st.subheader("🗓️ Matriz de Evolución Mensual del Costo (Rango Seleccionado)")
-    st.info("Visualiza el comportamiento del Costo Unitario mes a mes dentro del periodo seleccionado y su variación respecto al mes anterior.")
-    
     df_evolucion = df_filtrado[['Periodo', 'Huevos Fértiles', 'Costo Total', 'Costo Huevo Fértil']].copy()
-    # Calculamos la variación absoluta y porcentual mes a mes
     df_evolucion['Variación ($/HF)'] = df_evolucion['Costo Huevo Fértil'].diff()
     df_evolucion['% Variación'] = df_evolucion['Costo Huevo Fértil'].pct_change() * 100
     
@@ -317,17 +321,17 @@ elif menu == "3. Costo Huevo Fértil":
     }), use_container_width=True)
 
     st.markdown("---")
-    st.subheader("📋 Matriz Comparativa (Variación en Ítems de Facturación - VIF)")
+    st.subheader("📋 Matriz Comparativa (Variación VIF Directa)")
     st.dataframe(df_vif.style.format({f'Costo Unit Base ($)': '${:,.2f}', f'Costo Unit Actual ($)': '${:,.2f}', 'Impacto ($/HF)': '${:+,.2f}'}), use_container_width=True)
 
     st.markdown("---")
     st.subheader("🎛️ Modulo Predictivo: Estrategias de Reducción de Costo")
-    st.markdown("¿Qué pasa con el costo unitario si logramos las siguientes eficiencias operativas?")
+    st.markdown(f"Evaluando sobre la base operativa de **{p_actual}**:")
     
     s1, s2, s3 = st.columns(3)
     ahorro_alim = s1.number_input("1. Negociación Alimento: Disminuir precio en ($/Kg):", value=50)
-    mejora_conv = s2.number_input("2. Eficiencia: Bajar consumo (gramos por huevo):", value=15)
-    mejora_post = s3.number_input("3. Productividad: Subir % de postura en:", value=3)
+    mejora_conv = s2.number_input("2. Eficiencia: Bajar consumo (g/huevo):", value=15)
+    mejora_post = s3.number_input("3. Productividad: Subir % de postura en:", value=3.0, step=0.5)
     
     nuevo_p_alim = max(df_a['Precio Kg Alimento'] - ahorro_alim, 500)
     nuevo_cons_kg = max(df_a['Consumo Alimento Kg'] - ((mejora_conv / 1000) * df_a['Huevos Fértiles']), 0)
@@ -338,16 +342,17 @@ elif menu == "3. Costo Huevo Fértil":
     nuevo_costo_huevo = nuevo_costo_total / nuevos_hf
     ahorro_un = df_a['Costo Huevo Fértil'] - nuevo_costo_huevo
     
-    st.success(f"🎯 **Proyección Exitosa:** Ejecutando estas tres acciones, el costo bajaría de **${df_a['Costo Huevo Fértil']:,.1f}** a **${nuevo_costo_huevo:,.1f} COP**. Esto representa un ahorro directo de **${ahorro_un:,.1f} por huevo**.")
+    st.success(f"🎯 **Proyección Exitosa:** Ejecutando estas tres acciones conjuntas, el costo bajaría de **${df_a['Costo Huevo Fértil']:,.1f}** a **${nuevo_costo_huevo:,.1f} COP**. Representa un ahorro directo de **${ahorro_un:,.1f} por huevo**.")
 
-# -----------------------------------------------------------------------------
-# MENÚ 4: DETALLE COSTOS POR LOTE
-# -----------------------------------------------------------------------------
+
+# =============================================================================
+# 4. DETALLE COSTOS POR LOTE (RANKING Y TABLA AUDITORÍA)
+# =============================================================================
 elif menu == "4. Detalle Costos por Lote":
     st.markdown('<p class="main-title">4. DIAGNÓSTICO MICRO-OPERATIVO POR LOTE</p>', unsafe_allow_html=True)
-    st.markdown(f'<p class="subtitle">{texto_contexto} - Análisis del período Actual ({p_actual})</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="subtitle">Auditoría del período de cierre: <b>{p_actual}</b></p>', unsafe_allow_html=True)
     
-    # 1. Extracción y procesamiento de datos del mes actual
+    # Snapshot del mes actual seleccionado en el filtro
     df_l = df_raw[(df_raw['Periodo'] == p_actual)]
     df_c = df_l[df_l['Texto explicativo'] != 'CTA PTE LIQ. ORD PCC Y MAQUILAS'].groupby('Lote')['Totales'].sum()
     df_h = df_l[df_l['Texto breve de material'] == 'HUEVO INCUBABLE'].groupby('Lote')['Cantidad'].sum()
@@ -355,84 +360,64 @@ elif menu == "4. Detalle Costos por Lote":
     df_m = pd.DataFrame({'Costo Total': df_c, 'Huevos Fértiles': df_h}).dropna()
     df_m['Costo Unitario'] = df_m['Costo Total'] / df_m['Huevos Fértiles']
     df_m = df_m[df_m['Huevos Fértiles'] > 0].reset_index()
-    df_m['Lote'] = df_m['Lote'].astype(int).astype(str) # Convertir a texto para mejor visualización
     
-    # Ordenar de mayor a menor costo para el ranking
+    if df_m.empty:
+        st.warning("No hay registros de lotes para el mes seleccionado.")
+        st.stop()
+        
+    df_m['Lote'] = df_m['Lote'].astype(int).astype(str)
     df_m = df_m.sort_values('Costo Unitario', ascending=False)
     
-    # Cálculos clave
     lote_critico = df_m.iloc[0]
     lote_eficiente = df_m.iloc[-1]
     promedio_mes = df_m['Costo Total'].sum() / df_m['Huevos Fértiles'].sum()
     
-    # 2. Análisis e Insights Automáticos
     st.markdown(f"""
     <div class="alert-box">
-        🚨 <b>Auditoría de Ineficiencia y Causa Raíz:</b><br>
+        🚨 <b>Auditoría de Ineficiencia (Causa Raíz):</b><br>
         El <b>Lote {lote_critico['Lote']}</b> es el punto crítico de la operación este mes, con un costo unitario de <b>${lote_critico['Costo Unitario']:,.1f} COP/HF</b> (muy por encima del promedio de ${promedio_mes:,.1f}).<br>
-        <i>¿Por qué sucede esto?</i> Este lote produjo un volumen muy bajo ({lote_critico['Huevos Fértiles']:,.0f} huevos), lo que provoca que los costos fijos de la granja (depreciación de la gallina, mano de obra e instalaciones) se dividan entre muy pocas unidades, disparando el costo. <b>Se recomienda evaluar este lote para descarte por agotamiento de curva de postura.</b><br><br>
-        ✅ En contraste, el <b>Lote {lote_eficiente['Lote']}</b> sostiene la rentabilidad con una alta producción ({lote_eficiente['Huevos Fértiles']:,.0f} huevos) y un costo óptimo de <b>${lote_eficiente['Costo Unitario']:,.1f} COP/HF</b>.
+        <i>¿Por qué sucede esto?</i> Este lote produjo un volumen muy bajo ({lote_critico['Huevos Fértiles']:,.0f} huevos), lo que provoca que los costos fijos (depreciación gallina/M.O.) se dividan entre muy pocas unidades, disparando el costo. <b>Evaluar descarte por curva de postura.</b><br><br>
+        ✅ El <b>Lote {lote_eficiente['Lote']}</b> sostiene la rentabilidad con una alta producción ({lote_eficiente['Huevos Fértiles']:,.0f} huevos) y un costo óptimo de <b>${lote_eficiente['Costo Unitario']:,.1f} COP/HF</b>.
     </div>
     """, unsafe_allow_html=True)
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Lote Crítico (Mayor Costo)", f"Lote {lote_critico['Lote']}", f"${lote_critico['Costo Unitario']:,.1f}/HF", delta_color="inverse")
-    c2.metric("Promedio Ponderado del Mes", f"Total Granjas", f"${promedio_mes:,.1f}/HF", delta_color="off")
+    c2.metric("Promedio Ponderado Mes", f"General", f"${promedio_mes:,.1f}/HF", delta_color="off")
     c3.metric("Lote Más Eficiente", f"Lote {lote_eficiente['Lote']}", f"${lote_eficiente['Costo Unitario']:,.1f}/HF")
 
     st.markdown("---")
     
     col_grafico, col_tabla = st.columns([3, 2])
-    
     with col_grafico:
-        st.subheader("📊 Ranking de Costo Unitario por Lote")
-        
-        # Crear gráfico de barras ordenado
+        st.subheader("📊 Ranking de Ineficiencia por Lote")
         fig_bar_lote = px.bar(
-            df_m, 
-            x='Lote', 
-            y='Costo Unitario',
-            text_auto='.1f',
-            color='Costo Unitario',
-            color_continuous_scale='RdYlGn_r', # Rojo para los más caros, Verde para los baratos
-            title="Comparativo Directo de Costo ($/Huevo Fértil)"
+            df_m, x='Lote', y='Costo Unitario', text_auto='.1f',
+            color='Costo Unitario', color_continuous_scale='RdYlGn_r',
+            title=f"Costo Unitario Comparativo - {p_actual}"
         )
-        
-        # Agregar línea de promedio
-        fig_bar_lote.add_hline(
-            y=promedio_mes, 
-            line_dash="dot", 
-            annotation_text=f"Promedio Mes: ${promedio_mes:,.1f}", 
-            annotation_position="bottom right",
-            line_color="black"
-        )
-        
+        fig_bar_lote.add_hline(y=promedio_mes, line_dash="dot", annotation_text=f"Promedio: ${promedio_mes:,.1f}", line_color="black")
         fig_bar_lote.update_traces(textposition='outside')
-        fig_bar_lote.update_layout(yaxis_title="Costo Unitario ($ COP)", xaxis_title="Número de Lote")
+        fig_bar_lote.update_layout(yaxis_title="Costo Unitario ($ COP)")
         st.plotly_chart(fig_bar_lote, use_container_width=True)
 
     with col_tabla:
-        st.subheader("📋 Matriz de Costos por Lote")
-        st.info("Visualiza el volumen producido frente a los gastos absorbidos.")
-        
-        # Formatear la tabla para la alta gerencia
+        st.subheader("📋 Matriz de Auditoría Lotes")
         df_tabla = df_m[['Lote', 'Huevos Fértiles', 'Costo Total', 'Costo Unitario']].copy()
-        
         st.dataframe(df_tabla.style.format({
-            'Huevos Fértiles': '{:,.0f} unds',
-            'Costo Total': '${:,.0f}',
-            'Costo Unitario': '${:,.2f}'
+            'Huevos Fértiles': '{:,.0f} unds', 'Costo Total': '${:,.0f}', 'Costo Unitario': '${:,.2f}'
         }).background_gradient(subset=['Costo Unitario'], cmap='Reds'), use_container_width=True)
 
-# -----------------------------------------------------------------------------
-# MENÚ 5: DETALLE COSTOS POR LÍNEA
-# -----------------------------------------------------------------------------
+
+# =============================================================================
+# 5. DETALLE COSTOS POR LÍNEA
+# =============================================================================
 elif menu == "5. Detalle Costos por Línea":
     st.markdown('<p class="main-title">5. EVALUACIÓN FINANCIERA POR GENÉTICA</p>', unsafe_allow_html=True)
-    st.markdown(f'<p class="subtitle">{texto_contexto} - Análisis del período Actual ({p_actual})</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="subtitle">{texto_contexto}</p>', unsafe_allow_html=True)
     
-    df_c = df_raw_f[(df_raw_f['Periodo'] == p_actual) & (df_raw_f['Texto explicativo'] != 'CTA PTE LIQ. ORD PCC Y MAQUILAS')]
-    df_h = df_raw_f[(df_raw_f['Periodo'] == p_actual) & (df_raw_f['Texto breve de material'] == 'HUEVO INCUBABLE')]
+    df_c = df_raw_f[df_raw_f['Texto explicativo'] != 'CTA PTE LIQ. ORD PCC Y MAQUILAS']
+    df_h = df_raw_f[df_raw_f['Texto breve de material'] == 'HUEVO INCUBABLE']
     
     c_lin = df_c.groupby('linea')['Totales'].sum()
     h_lin = df_h.groupby('linea')['Cantidad'].sum()
@@ -444,20 +429,20 @@ elif menu == "5. Detalle Costos por Línea":
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("📈 Evolución Histórica por Raza")
-        # Corrección a df_raw_f
-        df_ts_g = df_raw_f[df_raw_f['Texto breve de material'] == 'HUEVO INCUBABLE'].groupby(['Periodo', 'linea'])['Cantidad'].sum().reset_index()
+        df_ts_g = df_h.groupby(['Periodo', 'linea'])['Cantidad'].sum().reset_index()
         fig_ts = px.line(df_ts_g, x='Periodo', y='Cantidad', color='linea', markers=True)
         st.plotly_chart(fig_ts, use_container_width=True)
     with col2:
-        st.subheader("📊 Costo Unitario Actual por Raza")
+        st.subheader("📊 Costo Unitario Promedio por Raza")
         fig_bar = px.bar(df_gen, x='linea', y='Costo Unitario ($/HF)', color='linea', text_auto='.1f')
         st.plotly_chart(fig_bar, use_container_width=True)
 
     st.dataframe(df_gen.style.format({'Costo Total ($)': '${:,.0f}', 'Huevos Fértiles': '{:,.0f}', 'Costo Unitario ($/HF)': '${:,.2f}'}), use_container_width=True)
 
-# -----------------------------------------------------------------------------
-# MENÚ 6: COSTO KG ALIMENTO
-# -----------------------------------------------------------------------------
+
+# =============================================================================
+# 6. COSTO KG ALIMENTO
+# =============================================================================
 elif menu == "6. Costo Kg Alimento":
     st.markdown('<p class="main-title">6. IMPACTO DEL COSTO DE ALIMENTO</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="subtitle">{texto_contexto}</p>', unsafe_allow_html=True)
@@ -471,14 +456,12 @@ elif menu == "6. Costo Kg Alimento":
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("📈 Evolución Precio Alimento ($/Kg)")
-        # Corrección a df_filtrado
         fig_a = px.line(df_filtrado, x='Periodo', y='Precio Kg Alimento', markers=True)
         fig_a.update_traces(line_color='#d62728', line_width=3)
         st.plotly_chart(fig_a, use_container_width=True)
         
     with col2:
         st.subheader("📈 Evolución Conversión (g/Huevo)")
-        # Corrección a df_filtrado
         fig_g = px.line(df_filtrado, x='Periodo', y='Gramos Alimento/Huevo', markers=True)
         fig_g.update_traces(line_color='#2ca02c', line_width=3)
         st.plotly_chart(fig_g, use_container_width=True)
@@ -494,4 +477,4 @@ elif menu == "6. Costo Kg Alimento":
         res_df['% VAR'] = ((res_df[2026] - res_df[2025]) / res_df[2025]) * 100
         st.dataframe(res_df.style.format({2025: '${:,.1f}', 2026: '${:,.1f}', '% VAR': '{:+.2f}%'}), use_container_width=True)
     else:
-        st.info("La tabla comparativa 2025 vs 2026 requiere datos de ambos años procesados.")
+        st.info("La tabla comparativa 2025 vs 2026 requiere datos de ambos años procesados en la matriz base.")
