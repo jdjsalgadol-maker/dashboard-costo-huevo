@@ -1,10 +1,17 @@
 import os
+import io
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
+# Funciones de exportación a PDF
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
 
 # -----------------------------------------------------------------------------
 # CONFIGURACIÓN DE LA PÁGINA
@@ -70,13 +77,49 @@ def load_data_from_file(file_source):
     df = pd.DataFrame(data_costos)
     return df, list(conceptos_filas.keys())
 
+def generar_pdf_resumen(df_resumen, mes_b, mes_a, var_tot):
+    """Genera un archivo PDF ejecutivo en memoria."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    story = []
+    styles = getSampleStyleSheet()
+    
+    title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], fontSize=16, leading=20, textColor=colors.HexColor('#1f77b4'))
+    story.append(Paragraph("<b>INFORME EJECUTIVO: VARIACIÓN COSTO HUEVO FÉRTIL</b>", title_style))
+    story.append(Spacer(1, 10))
+    
+    body_text = f"Análisis comparativo de variación entre el período <b>{mes_b}</b> y el período <b>{mes_a}</b>.<br/>" \
+                f"Variación Total Registrada: <b>${var_tot:+,.2f} COP por Huevo Fértil</b>."
+    story.append(Paragraph(body_text, styles['Normal']))
+    story.append(Spacer(1, 15))
+    
+    # Tabla de datos
+    table_data = [["Rubro de Costo", "Impacto $/Huevo"]]
+    for idx, row in df_resumen.iterrows():
+        table_data.append([str(row['Rubro']), f"${row['Impacto $/Huevo']:+,.2f} COP"])
+        
+    t = Table(table_data, colWidths=[250, 150])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1f77b4')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('ALIGN', (0,0), (-1,-1), 'LEFT'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0,0), (-1,0), 8),
+        ('BACKGROUND', (0,1), (-1,-1), colors.HexColor('#f7f9fa')),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+    ]))
+    
+    story.append(t)
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
 # -----------------------------------------------------------------------------
 # CONTROL DE CARGA EN EL SIDEBAR
 # -----------------------------------------------------------------------------
 st.sidebar.title("🐔 Gestión Avícola")
 st.sidebar.subheader("📂 Carga de Datos")
 
-# Opción A: Carga interactiva Drag & Drop
 uploaded_file = st.sidebar.file_uploader("Sube cualquier archivo Excel (.xlsx / .xls)", type=["xlsx", "xls"])
 
 df = None
@@ -90,7 +133,6 @@ if uploaded_file is not None:
         st.sidebar.error(f"Error procesando el archivo subido: {e}")
         st.stop()
 else:
-    # Opción B: Búsqueda automática de cualquier .xlsx disponible en la raíz o /data
     archivos_excel = [f for f in os.listdir('.') if (f.endswith('.xlsx') or f.endswith('.xls')) and not f.startswith('~$')]
     if os.path.exists('data'):
         archivos_excel += [os.path.join('data', f) for f in os.listdir('data') if (f.endswith('.xlsx') or f.endswith('.xls')) and not f.startswith('~$')]
@@ -116,16 +158,17 @@ menu = st.sidebar.radio(
         "1. Análisis Variación del Costo", 
         "2. Impacto por Ítem", 
         "3. Simulador de Escenarios (What-If)", 
-        "4. Proyección Futura"
+        "4. Proyección Futura",
+        "5. Exportar Reportes"
     ]
 )
 
 # -----------------------------------------------------------------------------
-# MÓDULO 1: ANÁLISIS DE VARIACIÓN INTERMENSUAL (CLARO Y EJECUTIVO)
+# MÓDULO 1: ANÁLISIS DE VARIACIÓN INTERMENSUAL + TENDENCIA
 # -----------------------------------------------------------------------------
 if menu == "1. Análisis Variación del Costo":
     st.header("🔍 ¿Por qué subió o bajó el Costo por Huevo Fértil?")
-    st.markdown("Compara dos períodos y visualiza claramente los rubros responsables de la variación en pesos COP por huevo.")
+    st.markdown("Compara dos períodos, analiza la tendencia histórica y visualiza los rubros responsables de la variación en pesos COP.")
     
     col1, col2, col3 = st.columns([2, 2, 1])
     with col1:
@@ -148,12 +191,26 @@ if menu == "1. Análisis Variación del Costo":
         costo_unit_analisis = df_analisis['Costo Huevo Fértil']
         variacion_total = costo_unit_analisis - costo_unit_base
         
-        # Tarjetas Métricas Superiores (KPIs)
+        # KPIs
         kpi1, kpi2, kpi3 = st.columns(3)
         kpi1.metric(f"Costo {mes_base}", f"${costo_unit_base:,.2f}")
         kpi2.metric(f"Costo {mes_analisis}", f"${costo_unit_analisis:,.2f}")
         kpi3.metric("Variación Total", f"${variacion_total:+,.2f} COP", delta=f"{(variacion_total/costo_unit_base)*100:+.1f}%", delta_color="inverse")
         
+        st.markdown("---")
+
+        # --- SECCIÓN NUEVA: GRÁFICO DE TENDENCIA HISTÓRICA ---
+        st.subheader("📈 Tendencia Histórica del Costo por Huevo Fértil")
+        fig_line = px.line(df, x='Periodo', y='Costo Huevo Fértil', markers=True, text='Costo Huevo Fértil',
+                           title="Evolución del Costo Unitario ($ COP / Huevo)")
+        fig_line.update_traces(texttemplate='$%{text:,.1f}', textposition='top center', line_color='#1f77b4', line_width=3)
+        
+        # Resaltar en la línea los dos puntos seleccionados
+        fig_line.add_scatter(x=[mes_base, mes_analisis], 
+                             y=[costo_unit_base, costo_unit_analisis],
+                             mode='markers', marker=dict(size=12, color='red'), name='Períodos Seleccionados')
+        
+        st.plotly_chart(fig_line, use_container_width=True)
         st.markdown("---")
 
         # Cálculo de impacto por rubro ($/huevo)
@@ -162,22 +219,25 @@ if menu == "1. Análisis Variación del Costo":
             unit_b = df_base[item] / huevo_base
             unit_a = df_analisis[item] / huevo_analisis
             var_item = unit_a - unit_b
-            if abs(var_item) > 0.01:  # Filtra variaciones menores a 1 centavo
+            if abs(var_item) > 0.01:
                 impactos[item] = var_item
                 
         df_imp = pd.DataFrame(list(impactos.items()), columns=['Rubro', 'Impacto $/Huevo']).sort_values(by='Impacto $/Huevo', ascending=True)
 
-        # OPCIÓN A: BARRAS HORIZONTALES (MUCHO MÁS CLARO QUE EL WATERFALL)
+        # BARRAS HORIZONTALES CON ETIQUETAS FORMATEADAS (+$.1f)
         if tipo_vista == "Barras de Impacto (Recomendado)":
             fig = px.bar(
                 df_imp,
                 y='Rubro',
                 x='Impacto $/Huevo',
                 orientation='h',
-                text_auto='+$.1f',
                 color='Impacto $/Huevo',
                 color_continuous_scale='Reds' if variacion_total > 0 else 'Greens',
                 title=f"Aporte Directo de cada Rubro al Cambio Total de ${variacion_total:+,.2f} COP/Huevo"
+            )
+            fig.update_traces(
+                text=[f"${v:+,.1f}" for v in df_imp['Impacto $/Huevo']], 
+                textposition='outside'
             )
             fig.update_layout(
                 xaxis_title="Impacto en el Costo Unitario ($ COP / Huevo)",
@@ -185,15 +245,11 @@ if menu == "1. Análisis Variación del Costo":
                 height=450,
                 coloraxis_showscale=False
             )
-            fig.update_traces(textposition='outside')
             st.plotly_chart(fig, use_container_width=True)
 
-        # OPCIÓN B: WATERFALL REESCALADO SIN DISTORSIÓN VISUAL
         else:
             items_wf = list(impactos.keys())
             valores_wf = list(impactos.values())
-            
-            # Recorta el eje Y para que las barras flotantes se vean anchas y claras
             min_y = min(costo_unit_base, costo_unit_analisis) * 0.95
             
             fig = go.Figure(go.Waterfall(
@@ -201,7 +257,7 @@ if menu == "1. Análisis Variación del Costo":
                 measure=["absolute"] + ["relative"] * len(items_wf) + ["total"],
                 x=[f"Base ({mes_base})"] + items_wf + [f"Final ({mes_analisis})"],
                 textposition="outside",
-                text=[f"${costo_unit_base:,.1f}"] + [f"{v:+.1f}" for v in valores_wf] + [f"${costo_unit_analisis:,.1f}"],
+                text=[f"${costo_unit_base:,.1f}"] + [f"${v:+,.1f}" for v in valores_wf] + [f"${costo_unit_analisis:,.1f}"],
                 y=[costo_unit_base] + valores_wf + [0],
                 connector={"line":{"color":"gray"}},
                 decreasing={"marker":{"color":"#2ca02c"}},
@@ -215,7 +271,7 @@ if menu == "1. Análisis Variación del Costo":
             )
             st.plotly_chart(fig, use_container_width=True)
 
-        # Resumen Ejecutivo
+        # Resumen Ejecutivo y Botón PDF Rápido
         df_top = df_imp.sort_values(by='Impacto $/Huevo', ascending=False)
         st.subheader("💡 Conclusión del Análisis:")
         col_left, col_right = st.columns(2)
@@ -331,3 +387,57 @@ elif menu == "4. Proyección Futura":
     
     st.subheader("Valores Estimados Proyectados:")
     st.dataframe(df_proj.style.format({'Costo Proyectado': '${:,.2f}'}), use_container_width=True)
+
+# -----------------------------------------------------------------------------
+# MÓDULO 5: EXPORTAR INFORMES (EXCEL Y PDF)
+# -----------------------------------------------------------------------------
+elif menu == "5. Exportar Reportes":
+    st.header("📥 Centro de Exportación de Reportes")
+    st.markdown("Descarga la base de datos limpia o genera un informe oficial en formato PDF para reuniones ejecutivas.")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📊 Exportar a Excel")
+        st.write("Descarga los datos procesados en formato estructurado (.xlsx).")
+        
+        buffer_excel = io.BytesIO()
+        with pd.ExcelWriter(buffer_excel, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Matriz_Costos_Historica', index=False)
+        buffer_excel.seek(0)
+        
+        st.download_button(
+            label="💾 Descargar Excel Completo",
+            data=buffer_excel,
+            file_name="Matriz_Costos_Huevo_Fertil.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        
+    with col2:
+        st.subheader("📄 Exportar Reporte Ejecutivo a PDF")
+        st.write("Genera un documento PDF oficial del análisis de variación.")
+        
+        mes_b_pdf = st.selectbox("Período Base PDF:", df['Periodo'].tolist(), index=0)
+        mes_a_pdf = st.selectbox("Período Análisis PDF:", df['Periodo'].tolist(), index=len(df)-1)
+        
+        if st.button("⚙️ Generar PDF"):
+            df_b_pdf = df[df['Periodo'] == mes_b_pdf].iloc[0]
+            df_a_pdf = df[df['Periodo'] == mes_a_pdf].iloc[0]
+            
+            imp_pdf = {}
+            for item in rubros_items:
+                v_b = df_b_pdf[item] / df_b_pdf['Huevos Fértiles']
+                v_a = df_a_pdf[item] / df_a_pdf['Huevos Fértiles']
+                imp_pdf[item] = v_a - v_b
+                
+            df_res_pdf = pd.DataFrame(list(imp_pdf.items()), columns=['Rubro', 'Impacto $/Huevo']).sort_values(by='Impacto $/Huevo', ascending=False)
+            var_tot_pdf = df_a_pdf['Costo Huevo Fértil'] - df_b_pdf['Costo Huevo Fértil']
+            
+            pdf_bytes = generar_pdf_resumen(df_res_pdf, mes_b_pdf, mes_a_pdf, var_tot_pdf)
+            
+            st.download_button(
+                label="📄 Descargar Informe PDF",
+                data=pdf_bytes,
+                file_name=f"Informe_Costo_Huevo_{mes_b_pdf}_vs_{mes_a_pdf}.pdf",
+                mime="application/pdf"
+            )
