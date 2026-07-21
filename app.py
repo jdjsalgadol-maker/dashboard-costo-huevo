@@ -41,7 +41,6 @@ def load_and_process_data(file_source):
     df_raw = pd.read_excel(xls, sheet_name='BASE ZCO001')
     df_raw.columns = df_raw.columns.astype(str).str.strip()
     
-    # Estandarización de Fechas (Año y Mes)
     if 'Fecha' in df_raw.columns:
         df_raw['Fecha'] = pd.to_datetime(df_raw['Fecha'])
         df_raw['Anio'] = df_raw['Fecha'].dt.year
@@ -54,7 +53,6 @@ def load_and_process_data(file_source):
     df_raw['Totales'] = pd.to_numeric(df_raw['Totales'], errors='coerce').fillna(0)
     df_raw['Cantidad'] = pd.to_numeric(df_raw['Cantidad'], errors='coerce').fillna(0)
     
-    # Homologación contable a conceptos gerenciales
     map_rubros = {
         'CONSUMO ALIMENTO': 'Alimento',
         'PP Depr. Gallina Grj.Pcc.': 'Depreciación Parvada',
@@ -69,7 +67,6 @@ def load_and_process_data(file_source):
         'DIFERENCIA EN PRECIO PRODUCTOS SEMIELABO': 'Aprovechamientos (-)'
     }
     
-    # KPIs Base
     df_hf = df_raw[df_raw['Texto breve de material'] == 'HUEVO INCUBABLE']
     hf_mes = df_hf.groupby('Periodo')['Cantidad'].sum()
     
@@ -117,7 +114,6 @@ else:
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Control Temporal")
 
-# Diccionarios para visualización
 meses_nombres = {1: 'Ene', 2: 'Feb', 3: 'Mar', 4: 'Abr', 5: 'May', 6: 'Jun', 7: 'Jul', 8: 'Ago', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dic'}
 anios_disp = sorted(df['Anio'].unique(), reverse=True)
 
@@ -140,7 +136,8 @@ if modo_analisis == "⚖️ Comparativo (Mes VS Mes)":
     p_base = f"{anio_b}-{str(mes_b).zfill(2)}"
     p_actual = f"{anio_a}-{str(mes_a).zfill(2)}"
     
-    df_filtrado = df[df['Periodo'].isin([p_base, p_actual])]
+    # Filtro aplicado a los datos
+    df_filtrado = df[df['Periodo'].isin([p_base, p_actual])].sort_values('Periodo')
     df_raw_f = df_raw[df_raw['Periodo'].isin([p_base, p_actual])]
     texto_contexto = f"Comparativa Estratégica: **{meses_nombres[mes_a]} {anio_a}** VS **{meses_nombres[mes_b]} {anio_b}**"
 
@@ -158,7 +155,8 @@ else:
     p_base = f"{anio_i}-{str(mes_i).zfill(2)}"
     p_actual = f"{anio_f}-{str(mes_f).zfill(2)}"
     
-    df_filtrado = df[(df['Periodo'] >= p_base) & (df['Periodo'] <= p_actual)]
+    # Filtro aplicado a los datos
+    df_filtrado = df[(df['Periodo'] >= p_base) & (df['Periodo'] <= p_actual)].sort_values('Periodo')
     df_raw_f = df_raw[(df_raw['Periodo'] >= p_base) & (df_raw['Periodo'] <= p_actual)]
     texto_contexto = f"Evolución Histórica: Desde **{p_base}** hasta **{p_actual}**"
 
@@ -199,7 +197,6 @@ def generar_diagnostico_costos(df_impactos, var_total, p_actual, p_base):
 
     return f"""<div class="alert-box">🚨 <b>Alerta de Desviación Financiera (+${var_total:,.2f} COP/Huevo):</b><br>{recomendacion}</div>"""
 
-
 # -----------------------------------------------------------------------------
 # MENÚ 1: PRODUCCIÓN
 # -----------------------------------------------------------------------------
@@ -223,7 +220,8 @@ if menu == "1. Producción":
     col_l, col_r = st.columns([2, 1])
     with col_l:
         st.subheader("📈 Evolución Histórica de Producción")
-        df_ts = df_raw[df_raw['Texto breve de material'] == 'HUEVO INCUBABLE'].groupby('Periodo')['Cantidad'].sum().reset_index()
+        # Corrección: Ahora apunta a df_raw_f para que respete el slider temporal
+        df_ts = df_raw_f[df_raw_f['Texto breve de material'] == 'HUEVO INCUBABLE'].groupby('Periodo')['Cantidad'].sum().reset_index()
         fig_ts = px.line(df_ts, x='Periodo', y='Cantidad', markers=True, title="Comportamiento del Volumen en el Tiempo")
         fig_ts.update_traces(line_color='#1E3A8A', line_width=3)
         st.plotly_chart(fig_ts, use_container_width=True)
@@ -251,17 +249,18 @@ elif menu == "2. Producción Mes a Mes por Línea":
     st.dataframe(piv_prod.style.format('{:,.0f}'), use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# MENÚ 3: COSTO HUEVO FÉRTIL (VIF & SIMULADOR)
+# MENÚ 3: COSTO HUEVO FÉRTIL (VIF & SIMULADOR & TABLA EVOLUTIVA)
 # -----------------------------------------------------------------------------
 elif menu == "3. Costo Huevo Fértil":
     st.markdown('<p class="main-title">3. ANÁLISIS INTEGRAL: COSTO HUEVO FÉRTIL Y DESVIACIONES</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="subtitle">Análisis de {p_actual} frente a la base {p_base}</p>', unsafe_allow_html=True)
     
     if p_base == p_actual:
-        st.warning("⚠️ Para el análisis VIF, por favor selecciona en la barra lateral el modo 'Comparativo' con dos períodos distintos.")
+        st.warning("⚠️ Para el análisis VIF, por favor selecciona en la barra lateral el modo 'Comparativo' con dos períodos distintos o un rango de meses.")
         st.stop()
         
     try:
+        # Extraemos la base y actual directamente del dataset sin importar el modo
         df_b = df[df['Periodo'] == p_base].iloc[0]
         df_a = df[df['Periodo'] == p_actual].iloc[0]
     except:
@@ -275,21 +274,21 @@ elif menu == "3. Costo Huevo Fértil":
     c2.metric(f"Costo {p_actual} (Actual)", f"${df_a['Costo Huevo Fértil']:,.2f}")
     c3.metric("Desviación Total ($/HF)", f"${var_tot:+,.2f}", delta=f"{(var_tot/df_b['Costo Huevo Fértil'])*100:+.1f}%", delta_color="inverse")
     
+    # 1. Diagnóstico Automático VIF
     filas = []
     for r in rubros_items:
         ub = df_b[r] / df_b['Huevos Fértiles']
         ua = df_a[r] / df_a['Huevos Fértiles']
         filas.append({'Rubro': r, f'Costo Unit Base ($)': ub, f'Costo Unit Actual ($)': ua, 'Impacto ($/HF)': ua - ub})
-        
     df_vif = pd.DataFrame(filas).sort_values('Impacto ($/HF)', ascending=False)
     
-    # Insights Automáticos
     st.markdown(generar_diagnostico_costos(df_vif.sort_values('Impacto ($/HF)'), var_tot, p_actual, p_base), unsafe_allow_html=True)
     
+    # 2. Gráficos dinámicos (Corrección de df a df_filtrado)
     col1, col2 = st.columns([1, 1])
     with col1:
         st.subheader("📈 Evolución Histórica de Costo ($)")
-        fig_line_c = px.line(df, x='Periodo', y='Costo Huevo Fértil', markers=True)
+        fig_line_c = px.line(df_filtrado, x='Periodo', y='Costo Huevo Fértil', markers=True)
         fig_line_c.update_traces(line_color='#1E3A8A', line_width=3)
         st.plotly_chart(fig_line_c, use_container_width=True)
     with col2:
@@ -297,7 +296,27 @@ elif menu == "3. Costo Huevo Fértil":
         fig_tor = px.bar(df_vif.sort_values('Impacto ($/HF)'), y='Rubro', x='Impacto ($/HF)', orientation='h', 
                          color='Impacto ($/HF)', color_continuous_scale='Reds' if var_tot > 0 else 'Greens')
         st.plotly_chart(fig_tor, use_container_width=True)
-        
+    
+    st.markdown("---")
+    
+    # 3. TABLA DE EVOLUCIÓN MENSUAL DEL COSTO (Agregada según solicitud)
+    st.subheader("🗓️ Matriz de Evolución Mensual del Costo (Rango Seleccionado)")
+    st.info("Visualiza el comportamiento del Costo Unitario mes a mes dentro del periodo seleccionado y su variación respecto al mes anterior.")
+    
+    df_evolucion = df_filtrado[['Periodo', 'Huevos Fértiles', 'Costo Total', 'Costo Huevo Fértil']].copy()
+    # Calculamos la variación absoluta y porcentual mes a mes
+    df_evolucion['Variación ($/HF)'] = df_evolucion['Costo Huevo Fértil'].diff()
+    df_evolucion['% Variación'] = df_evolucion['Costo Huevo Fértil'].pct_change() * 100
+    
+    st.dataframe(df_evolucion.style.format({
+        'Huevos Fértiles': '{:,.0f}',
+        'Costo Total': '${:,.0f}',
+        'Costo Huevo Fértil': '${:,.2f}',
+        'Variación ($/HF)': '${:+,.2f}',
+        '% Variación': '{:+.2f}%'
+    }), use_container_width=True)
+
+    st.markdown("---")
     st.subheader("📋 Matriz Comparativa (Variación en Ítems de Facturación - VIF)")
     st.dataframe(df_vif.style.format({f'Costo Unit Base ($)': '${:,.2f}', f'Costo Unit Actual ($)': '${:,.2f}', 'Impacto ($/HF)': '${:+,.2f}'}), use_container_width=True)
 
@@ -371,13 +390,16 @@ elif menu == "5. Detalle Costos por Línea":
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("📈 Evolución Histórica por Raza")
-        df_ts_g = df_raw[df_raw['Texto breve de material'] == 'HUEVO INCUBABLE'].groupby(['Periodo', 'linea'])['Cantidad'].sum().reset_index()
+        # Corrección a df_raw_f
+        df_ts_g = df_raw_f[df_raw_f['Texto breve de material'] == 'HUEVO INCUBABLE'].groupby(['Periodo', 'linea'])['Cantidad'].sum().reset_index()
         fig_ts = px.line(df_ts_g, x='Periodo', y='Cantidad', color='linea', markers=True)
         st.plotly_chart(fig_ts, use_container_width=True)
     with col2:
         st.subheader("📊 Costo Unitario Actual por Raza")
         fig_bar = px.bar(df_gen, x='linea', y='Costo Unitario ($/HF)', color='linea', text_auto='.1f')
         st.plotly_chart(fig_bar, use_container_width=True)
+
+    st.dataframe(df_gen.style.format({'Costo Total ($)': '${:,.0f}', 'Huevos Fértiles': '{:,.0f}', 'Costo Unitario ($/HF)': '${:,.2f}'}), use_container_width=True)
 
 # -----------------------------------------------------------------------------
 # MENÚ 6: COSTO KG ALIMENTO
@@ -395,13 +417,15 @@ elif menu == "6. Costo Kg Alimento":
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("📈 Evolución Precio Alimento ($/Kg)")
-        fig_a = px.line(df, x='Periodo', y='Precio Kg Alimento', markers=True)
+        # Corrección a df_filtrado
+        fig_a = px.line(df_filtrado, x='Periodo', y='Precio Kg Alimento', markers=True)
         fig_a.update_traces(line_color='#d62728', line_width=3)
         st.plotly_chart(fig_a, use_container_width=True)
         
     with col2:
         st.subheader("📈 Evolución Conversión (g/Huevo)")
-        fig_g = px.line(df, x='Periodo', y='Gramos Alimento/Huevo', markers=True)
+        # Corrección a df_filtrado
+        fig_g = px.line(df_filtrado, x='Periodo', y='Gramos Alimento/Huevo', markers=True)
         fig_g.update_traces(line_color='#2ca02c', line_width=3)
         st.plotly_chart(fig_g, use_container_width=True)
 
