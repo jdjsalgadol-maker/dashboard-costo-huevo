@@ -4,3 +4,4 @@ openpyxl
 plotly
 statsmodels
 scikit-learn
+reportlab
