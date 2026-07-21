@@ -29,7 +29,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. MOTOR DE DATOS (ETL) CON CALIBRACIÓN FINANCIERA EJECUTIVA
+# 2. MOTOR DE DATOS (ETL) - CALIBRACIÓN FINANCIERA EXACTA
 # -----------------------------------------------------------------------------
 @st.cache_data
 def load_and_process_data(file_source):
@@ -41,6 +41,7 @@ def load_and_process_data(file_source):
     df_raw = pd.read_excel(xls, sheet_name='BASE ZCO001')
     df_raw.columns = df_raw.columns.astype(str).str.strip()
     
+    # Estandarización de Fechas
     if 'Fecha' in df_raw.columns:
         df_raw['Fecha'] = pd.to_datetime(df_raw['Fecha'])
         df_raw['Anio'] = df_raw['Fecha'].dt.year
@@ -70,11 +71,9 @@ def load_and_process_data(file_source):
     df_hf = df_raw[df_raw['Texto breve de material'] == 'HUEVO INCUBABLE']
     hf_mes = df_hf.groupby('Periodo')['Cantidad'].sum()
     
+    # Procesamiento estricto de costos operativos y liquidación
     df_costos = df_raw[df_raw['Texto explicativo'].isin(map_rubros.keys())].copy()
     df_costos['Rubro'] = df_costos['Texto explicativo'].map(map_rubros)
-    
-    # Calibración contable: Ajustamos Aprovechamientos para reflejar el crédito gerencial exacto (-12.4 aprox)
-    df_costos.loc[df_costos['Rubro'] == 'Aprovechamientos (-)', 'Totales'] = -1 * (df_costos.loc[df_costos['Rubro'] == 'Aprovechamientos (-)', 'Totales'].abs() + (df_costos['Cantidad'].sum() * 12.4))
     
     costos_piv = df_costos.groupby(['Periodo', 'Rubro'])['Totales'].sum().unstack(fill_value=0)
     
@@ -98,7 +97,7 @@ def load_and_process_data(file_source):
     return df_res, rubros, df_raw
 
 # -----------------------------------------------------------------------------
-# 3. BARRA LATERAL Y FILTROS
+# 3. BARRA LATERAL Y FILTROS DE TIEMPO INTELIGENTES
 # -----------------------------------------------------------------------------
 st.sidebar.title("🐔 BI Avícola Gerencial")
 uploaded_file = st.sidebar.file_uploader("Actualizar Data (.xlsx)", type=["xlsx", "xls"])
@@ -145,6 +144,7 @@ if modo_analisis == "⚖️ Comparativo (Mes VS Mes)":
     
     df_filtrado_graficas = df[(df['Periodo'] >= rango_inicio) & (df['Periodo'] <= rango_fin)].sort_values('Periodo')
     df_raw_graficas = df_raw[(df_raw['Periodo'] >= rango_inicio) & (df_raw['Periodo'] <= rango_fin)]
+    
     texto_contexto = f"Comparativa Estratégica: **{meses_nombres[mes_a]} {anio_a}** VS **{meses_nombres[mes_b]} {anio_b}**"
 
 else:
@@ -166,6 +166,7 @@ else:
     
     df_filtrado_graficas = df[(df['Periodo'] >= rango_inicio) & (df['Periodo'] <= rango_fin)].sort_values('Periodo')
     df_raw_graficas = df_raw[(df_raw['Periodo'] >= rango_inicio) & (df_raw['Periodo'] <= rango_fin)]
+    
     texto_contexto = f"Evolución Histórica: Desde **{rango_inicio}** hasta **{rango_fin}**"
 
 st.sidebar.markdown("---")
@@ -184,7 +185,8 @@ menu = st.sidebar.radio(
 def generar_diagnostico_costos(df_impactos, var_total, p_actual, p_base):
     if var_total <= 0:
         rubro_exito = df_impactos.iloc[0]['Rubro']
-        return f"""<div class="insight-box">✅ <b>Eficiencia Operativa:</b> El costo unitario presenta una reducción de <b>${abs(var_total):,.2f} COP/Huevo</b> respecto a {p_base}. Ahorro impulsado por <b>{rubro_exito}</b>.</div>"""
+        return f"""<div class="insight-box">✅ <b>Eficiencia Operativa Alcanzada:</b> El costo unitario presenta una reducción de <b>${abs(var_total):,.2f} COP/Huevo</b> respecto a {p_base}.<br>
+        <i>Causa Raíz:</i> El rubro que más impulsó este ahorro fue <b>{rubro_exito}</b>. Mantener controles actuales.</div>"""
     
     rubro_critico = df_impactos.iloc[-1]['Rubro']
     impacto_critico = df_impactos.iloc[-1]['Impacto ($/HF)']
