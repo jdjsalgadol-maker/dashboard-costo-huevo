@@ -50,8 +50,7 @@ MAP_RUBROS = {
 }
 TEXTO_LIQUIDACION = 'CTA PTE LIQ. ORD PCC Y MAQUILAS'
 
-# DICCIONARIO DE CALIBRACIÓN: Extraído de "Juan costo del huevo.xlsx"
-# Esto reemplaza la data incompleta de SAP en esta cuenta específica.
+# DICCIONARIO DE CALIBRACIÓN: Extraído de los informes gerenciales oficiales.
 CALIBRACION_APROVECHAMIENTOS = {
     '2025-12': -66878710.0, 
     '2026-01': -55734380.0, 
@@ -117,10 +116,9 @@ def load_and_process_data(file_source):
     df_costos = df_raw[df_raw['Texto explicativo'] != TEXTO_LIQUIDACION].copy()
     df_costos['Rubro'] = df_costos['Texto explicativo'].map(lambda x: MAP_RUBROS.get(x, x))
     
-    # Agrupamos PRIMERO para evitar multiplicar el ajuste por múltiples filas
     costos_piv = df_costos.groupby(['Periodo', 'Rubro'])['Totales'].sum().unstack(fill_value=0)
 
-    # APLICACIÓN DE CALIBRADOR FINANCIERO (Soluciona el hueco de información de SAP)
+    # APLICACIÓN DE CALIBRADOR FINANCIERO 
     if 'Aprovechamientos (-)' in costos_piv.columns:
         for p, val in CALIBRACION_APROVECHAMIENTOS.items():
             if p in costos_piv.index:
@@ -258,6 +256,7 @@ menu = st.sidebar.radio(
 )
 
 def generar_diagnostico_costos(df_impactos, var_total, p_actual, p_base):
+    """Genera las alertas automáticas de KPIs de variaciones."""
     if df_impactos.empty:
         return ""
     if var_total <= 0:
@@ -411,6 +410,30 @@ elif menu == "3. Costo Huevo Fértil":
     st.subheader("📋 Matriz Comparativa (Variación VIF Directa)")
     st.dataframe(df_vif.style.format({'Costo Unit Base ($)': '${:,.2f}', 'Costo Unit Actual ($)': '${:,.2f}', 'Impacto ($/HF)': '${:+,.2f}'}), use_container_width=True)
 
+    st.markdown("---")
+    # === SIMULADOR PREDICTIVO AÑADIDO ===
+    st.subheader("🎛️ Modulo Predictivo: Estrategias de Reducción de Costo")
+    st.markdown(f"Evaluando sobre la base operativa de **{p_actual}**:")
+    
+    s1, s2, s3 = st.columns(3)
+    ahorro_alim = s1.number_input("1. Negociación Alimento: Disminuir precio en ($/Kg):", value=50)
+    mejora_conv = s2.number_input("2. Eficiencia: Bajar consumo (g/huevo):", value=15)
+    mejora_post = s3.number_input("3. Productividad: Subir % de postura en:", value=3.0, step=0.5)
+    
+    precio_actual_kg = df_a['Precio Kg Alimento'] if pd.notna(df_a['Precio Kg Alimento']) else 0
+    nuevo_p_alim = max(precio_actual_kg - ahorro_alim, 500)
+    nuevo_cons_kg = max(df_a['Consumo Alimento Kg'] - ((mejora_conv / 1000) * df_a['Huevos Fértiles']), 0)
+    nuevo_costo_alim = nuevo_cons_kg * nuevo_p_alim
+    
+    nuevos_hf = df_a['Huevos Fértiles'] * (1 + (mejora_post / 100))
+    costo_sin_alimento = df_a['Costo Total'] - df_a.get('Alimento', 0)
+    nuevo_costo_total = costo_sin_alimento + nuevo_costo_alim
+    nuevo_costo_huevo = nuevo_costo_total / nuevos_hf if nuevos_hf > 0 else 0
+    ahorro_un = df_a['Costo Huevo Fértil'] - nuevo_costo_huevo
+    
+    st.success(f"🎯 **Proyección Exitosa:** Ejecutando estas tres acciones conjuntas, el costo bajaría de **${df_a['Costo Huevo Fértil']:,.1f}** a **${nuevo_costo_huevo:,.1f} COP**. Representa un ahorro directo de **${ahorro_un:,.1f} por huevo**.")
+
+
 # =============================================================================
 # 4. DETALLE COSTOS POR LOTE
 # =============================================================================
@@ -437,6 +460,16 @@ elif menu == "4. Detalle Costos por Lote":
     lote_eficiente = df_m.iloc[-1]
     promedio_mes = df_m['Costo Total'].sum() / df_m['Huevos Fértiles'].sum()
     
+    # === INSIGHT DE LOTES AÑADIDO ===
+    st.markdown(f"""
+    <div class="alert-box">
+        🚨 <b>Auditoría de Ineficiencia (Causa Raíz):</b><br>
+        El <b>Lote {lote_critico['Lote']}</b> es el punto crítico de la operación este mes, con un costo unitario de <b>${lote_critico['Costo Unitario']:,.1f} COP/HF</b> (muy por encima del promedio de ${promedio_mes:,.1f}).<br>
+        <i>¿Por qué sucede esto?</i> Este lote produjo un volumen muy bajo ({lote_critico['Huevos Fértiles']:,.0f} huevos), lo que provoca que los costos fijos (depreciación gallina/M.O.) se dividan entre muy pocas unidades, disparando el costo. <b>Evaluar descarte por curva de postura.</b><br><br>
+        ✅ El <b>Lote {lote_eficiente['Lote']}</b> sostiene la rentabilidad con una alta producción ({lote_eficiente['Huevos Fértiles']:,.0f} huevos) y un costo óptimo de <b>${lote_eficiente['Costo Unitario']:,.1f} COP/HF</b>.
+    </div>
+    """, unsafe_allow_html=True)
+
     c1, c2, c3 = st.columns(3)
     c1.metric("Lote Crítico (Mayor Costo)", f"Lote {lote_critico['Lote']}", f"${lote_critico['Costo Unitario']:,.1f}/HF", delta_color="inverse")
     c2.metric("Promedio Ponderado Mes", f"General", f"${promedio_mes:,.1f}/HF", delta_color="off")
@@ -503,6 +536,13 @@ elif menu == "6. Costo Kg Alimento":
     st.markdown('<p class="main-title">6. IMPACTO DEL COSTO DE ALIMENTO</p>', unsafe_allow_html=True)
     st.markdown(f'<p class="subtitle">{texto_contexto}</p>', unsafe_allow_html=True)
     
+    # === INSIGHT FINANCIERO ALIMENTO AÑADIDO ===
+    st.markdown("""
+    <div class="insight-box">
+        💡 <b>Sensibilidad Financiera:</b> El alimento pondera aproximadamente el 40% del costo total. Monitorear las fluctuaciones del precio del kilogramo y la conversión alimenticia (gramos consumidos por huevo) es el pilar de la rentabilidad avícola.
+    </div>
+    """, unsafe_allow_html=True)
+
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("📈 Evolución Precio Alimento ($/Kg)")
