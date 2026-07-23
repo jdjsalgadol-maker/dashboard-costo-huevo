@@ -1,4 +1,3 @@
-
 """
 ==================================================================================================
 DASHBOARD EJECUTIVO — COSTO DEL HUEVO FERTIL Y ANALISIS GERENCIAL (GRANJAS REPRODUCTORAS)
@@ -11,63 +10,6 @@ Hojas usadas:
   - BD               -> Serie historica consolidada Costo Total / KG Alimento (pagina 7)
   - BD LEVANTE       -> Resultados tecnicos y de costo de LEVANTE por lote (pagina 9-13)
   - BD PRODUCCION    -> Resultados tecnicos y de costo de PRODUCCION por lote (pagina 14-18)
-
-Cada opcion del menu lateral = una pagina del informe PDF "ANALISIS COSTOS GRANJAS REPRODUCTORAS".
-Cada pagina incluye:
-  1) Analisis de texto automatico (motor de diagnosticos basado en los datos filtrados)
-  2) Graficos Plotly de alto impacto visual (cascada, medidor, treemap, combinado, dona)
-  3) Tablas detalladas con formato condicional
-
---------------------------------------------------------------------------------------------------
-BITACORA DE DEPURACION Y RECONCILIACION DE DATOS (proceso de validacion previo a esta version)
---------------------------------------------------------------------------------------------------
-- Se diagnosticaron errores del pipeline de datos y se reconciliaron los vacios de reporteria
-  (Diagnosed data pipeline bugs and reconciled reporting gaps).
-- Se revisaron los nombres de hojas del Excel y las columnas de cada hoja para mapear
-  correctamente cada fuente contra la presentacion en PDF.
-- Se excavaron los mapeos de datos y se depuro la logica de validacion de campos
-  (Excavated data mappings and debugged field validation logic), explorando a fondo BASE ZCO001.
-- Se detectaron inconsistencias de formato entre los distintos datasets
-  (Scrutinized data format inconsistencies across multiple datasets), explorando BD LEVANTE
-  y BD PRODUCCION en paralelo.
-- Se compararon los lotes 2026 entre hojas (BASE ZCO001, BD LEVANTE, BD PRODUCCION, BD CTO LINEA)
-  para confirmar que el cruce por Lote es consistente:
-      * BASE ZCO001 2026: lotes 206 a 225 (21 lotes).
-      * BD CTO LINEA 2026: lotes 206 a 226 (incluye el lote 226, cerrado a fin de junio).
-      * BD LEVANTE 2026: lotes 218 a 226 (levantes en curso/finalizados del año).
-      * BD PRODUCCION 2026: lotes 206 a 213 (lotes que ya finalizaron ciclo productivo).
-  Se investigaron los campos y se cruzaron sistematicamente las entradas de produccion
-  (Investigated data fields and cross-referenced production entries systematically), agregando
-  detalle adicional de lotes y hojas resumen para dejar trazabilidad completa.
-- Se reconciliaron las fuentes de datos y se identificaron discrepancias en las cifras de
-  produccion (Reconciled data sources and identified production figure discrepancies),
-  validando la hoja BD contra el PPT: el Costo Huevo Fertil de junio 2026 en la hoja BD
-  ($6,459,183,826 / 4,828,135 = $1,337.4) es consistente en orden de magnitud con el costeo
-  detallado de BASE ZCO001 ($6,430,826,391 / 4,828,135 = $1,331.9, cifra que coincide EXACTA
-  con la pagina 4 del PDF), la diferencia corresponde a partidas de cierre contable posteriores
-  registradas solo en la hoja consolidada 'BD'.
-- Se reconciliaron discrepancias de hoja de calculo y se valido la metodologia de agregacion
-  (Reconciled spreadsheet discrepancies and validated data aggregation methodology), comparando
-  el calculo de app.py contra la hoja BD para junio 2026 y confirmando que el motor ETL basado
-  en BASE ZCO001 es la fuente de verdad mas granular (permite bajar a nivel lote).
-- Se validaron los calculos y se giro hacia una verificacion granular de costos
-  (Validated calculations and pivoted toward granular cost verification), validando el detalle
-  por lote de junio 2026: la suma de Huevos Fertiles por lote en BD CTO LINEA (212 a 226)
-  totaliza 4,828,135 unidades, IDENTICO al total general de la pagina 5 del PDF.
-- Se diagnosticaron vacios de validacion de datos y se reconciliaron mapeos de granja en
-  conflicto (Diagnosed data validation gaps and reconciled conflicting farm mappings),
-  verificando la consistencia lote-granja entre hojas: el campo 'Nombre 1' de BASE ZCO001
-  ya trae la granja asociada a cada lote (ej. Lote 212 y 213 -> GRANJA EL TABLAZO), por lo que
-  ya no es necesario reconstruir ese cruce con 'BD LEVANTE'/'BD PRODUCCION' como en versiones
-  anteriores del codigo (evita el bug de lotes sin granja asignada).
-- Se valido la hoja BD PN HF RAZA contra la tabla de Produccion 2026 del PPT: el total general
-  reconciliado (Propios + Externos) para el periodo ene-jun 2026 es de 49,933,987 unidades,
-  cifra IDENTICA a la fila "Total general" de la pagina 2 del PDF.
-- Se verifico el rango de años de BASE ZCO001 (2024 a 2026) y los valores nulos por columna:
-  columnas 'Material' y 'Texto breve de material' tienen nulos (1,612 filas) correspondientes
-  a movimientos contables sin material asociado (ajustes/liquidaciones), y 'Cantidad' tiene
-  128 nulos que se tratan como cero mediante la funcion de limpieza numerica.
-==================================================================================================
 """
 
 from pathlib import Path
@@ -121,8 +63,9 @@ def estilizar_grafico(fig, titulo, subtitulo="", altura=430):
     fig.update_layout(
         title={"text": texto_titulo, "x": 0.02, "xanchor": "left"},
         height=altura,
-        legend=dict(orientation="h", yanchor="bottom", y=1.10, xanchor="center", x=0.5),
-        margin=dict(t=90, l=10, r=10, b=10),
+        # Reubicamos la leyenda abajo para evitar que pise los títulos largos
+        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5),
+        margin=dict(t=90, l=10, r=10, b=60), 
         plot_bgcolor="white",
         paper_bgcolor="white",
         font=dict(family="Arial", size=13, color="#1F2937"),
@@ -159,20 +102,39 @@ def medidor_kpi(valor, referencia, titulo, sufijo="", formato_num=",.0f", mejor_
 
 
 def grafico_cascada_vif(df_vif, costo_base, costo_actual, titulo, subtitulo=""):
-    """Construye un grafico de cascada (waterfall) mostrando como cada rubro explica la variacion."""
+    """Construye un grafico de cascada (waterfall) optimizado visualmente."""
     df_ord = df_vif.sort_values("Impacto ($/HF)", key=abs, ascending=False)
     medidas = ["absolute"] + ["relative"] * len(df_ord) + ["total"]
-    etiquetas = ["Base"] + df_ord["Rubro"].tolist() + ["Actual"]
+    
+    # Formateo de las etiquetas para insertar saltos de línea si son muy largas
+    etiquetas = ["Base"] + [r.replace(" (", "<br>(").replace(" / ", "<br>") for r in df_ord["Rubro"]] + ["Actual"]
     valores = [costo_base] + df_ord["Impacto ($/HF)"].tolist() + [costo_actual]
+    
+    # Formateo del texto en las barras: los del medio llevan signo (+ o -)
+    textos = []
+    for i, v in enumerate(valores):
+        if i == 0 or i == len(valores) - 1:
+            textos.append(f"${v:,.0f}")
+        else:
+            textos.append(f"{v:+,.0f}")
+
     fig = go.Figure(go.Waterfall(
         orientation="v", measure=medidas, x=etiquetas, y=valores,
-        text=[f"{v:,.0f}" for v in valores], textposition="outside",
-        connector={"line": {"color": "#CBD5E1"}},
+        text=textos, textposition="outside",
+        connector={"line": {"color": "#94A3B8", "width": 2, "dash": "dot"}},
         increasing={"marker": {"color": "#EF4444"}},
         decreasing={"marker": {"color": "#10B981"}},
         totals={"marker": {"color": "#1E3A8A"}},
     ))
-    return estilizar_grafico(fig, titulo, subtitulo, altura=460)
+    
+    # Altura aumentada para evitar corte de textos
+    fig = estilizar_grafico(fig, titulo, subtitulo, altura=550)
+    fig.update_xaxes(tickangle=-45, title_text="")
+    
+    # Calcular un rango en Y que dé espacio holgado en la parte superior
+    max_y = max(max(np.cumsum(valores[:-1])), costo_base, costo_actual)
+    fig.update_yaxes(title_text="$ / Huevo", range=[0, max_y * 1.15])
+    return fig
 
 
 # =============================================================================
@@ -476,7 +438,6 @@ def cargar_y_procesar_datos(fuente_archivo):
     df_raw["Cantidad"] = df_raw["Cantidad"].apply(limpiar_numero)
     if "Lote" in df_raw.columns:
         df_raw["Lote_str"] = df_raw["Lote"].apply(limpiar_lote)
-    # 'Nombre 1' ya trae la granja asociada a cada lote (validado contra BD LEVANTE/BD PRODUCCION)
     df_raw["Granja"] = df_raw["Nombre 1"].fillna("Sin Granja Asignada") if "Nombre 1" in df_raw.columns else "Sin Granja Asignada"
 
     df_hf = df_raw[df_raw["Texto breve de material"] == MATERIAL_HF]
@@ -678,6 +639,8 @@ if menu == "1. Produccion (Propios/Externos)":
         fig_dona.update_traces(textinfo="label+percent", textposition="inside", pull=[0.04] * len(por_raza))
         fig_dona.update_layout(uniformtext_minsize=13, uniformtext_mode="hide")
         estilizar_grafico(fig_dona, "Participacion por Raza", "Total del periodo seleccionado")
+        # Aseguramos que la leyenda del grafico de dona no pise el titulo
+        fig_dona.update_layout(legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.0))
         st.plotly_chart(fig_dona, use_container_width=True)
 
     st.subheader("\U0001F4CB Matriz Mes / Raza")
@@ -776,7 +739,6 @@ elif menu == "3. Costo Huevo Fertil":
         fig_cascada = grafico_cascada_vif(df_vif, df_b["Costo Huevo Fertil"], df_a["Costo Huevo Fertil"],
                                            "De Base a Actual: que rubros explican la variacion",
                                            f"{p_base} \u2192 {p_actual} ($/HF)")
-        fig_cascada.update_yaxes(title_text="$ / Huevo")
         st.plotly_chart(fig_cascada, use_container_width=True)
 
     st.markdown("---")
