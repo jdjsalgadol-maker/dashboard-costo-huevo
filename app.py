@@ -1,3 +1,11 @@
+"""
+Dashboard Ejecutivo — Costos Granjas Reproductoras 2026
+=======================================================
+Fuente principal: 'INFORME GENERAL MENSUAL_4.xlsx'.
+Integra finanzas SAP ('BASE ZCO001') y censo técnico ('BD LEVANTE', 'BD PRODUCCIÓN')
+para generar todos los anexos del informe gerencial de presentación.
+"""
+
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -5,10 +13,10 @@ import plotly.express as px
 import streamlit as st
 
 # =============================================================================
-# 0. CONFIGURACIÓN DE PÁGINA Y ESTILOS EJECUTIVOS
+# 0. CONFIGURACIÓN DE PÁGINA Y ESTILOS
 # =============================================================================
 st.set_page_config(
-    page_title="Dashboard Ejecutivo - Costos Huevo Fértil",
+    page_title="Dashboard Ejecutivo - Costos Reproductoras",
     page_icon="🐔",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -34,419 +42,288 @@ MESES_NOMBRES = {1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr", 5: "May", 6: "Jun",
                  7: "Jul", 8: "Ago", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic"}
 
 # =============================================================================
-# 1. MOTOR DE DATOS (ETL) PARA INFORME GENERAL MENSUAL
+# 1. MOTOR DE DATOS (ETL) Y CLASIFICACIÓN CONTABLE
 # =============================================================================
+MATERIAL_HF = "HUEVO INCUBABLE"
+TEXTO_LIQUIDACION = "CTA PTE LIQ. ORD PCC Y MAQUILAS"
+TEXTO_DIFERENCIA_PRECIO = "DIFERENCIA EN PRECIO PRODUCTOS SEMIELABO"
 RUBRO_APROVECHAMIENTO = "Aprovechamientos (-)"
 
-MAP_RUBROS_BD = {
-    "Alimento": "Alimento",
-    "Cama - Cascarilla": "Cama / Cascarilla",
-    "Droga": "Sanidad (Medicamentos)",
-    "Materia prima (calcio)": "Materias Primas (Calcio)",
-    "Aseo y desinfección": "Bioseguridad y Aseo",
-    "Arriendo": "Arriendo",
-    "Depreciacion Const. Y Edif.": "Depreciación Instalaciones",
-    "Indirectos": "Costos Indirectos (CIF)",
-    "Depreciacion Huevo": "Depreciación Parvada",
-    "Mano de Obra": "Mano de Obra",
-    "Aprovechamientos (-)": RUBRO_APROVECHAMIENTO
+# Mapeo general de rubros
+MAP_RUBROS = {
+    "CONSUMO ALIMENTO": "Alimento",
+    "PP Depr. Gallina Grj.Pcc.": "PP Depreciación Parvada",
+    "PP Horas Hombre Grj.Pcc.": "PP Mano de Obra",
+    "PP Costos Ind. Grj.Pcc.": "PP Costos Indirectos (CIF)",
+    "PP Costos Arriendo Grj.Pcc.": "PP Arriendo",
+    "CONSUMO CAMA": "Cama / Cascarilla",
+    "ELEMENTOS DE ASEO Y DESINFECCION": "Bioseguridad y Aseo",
+    "CONSUMO DROGA": "Sanidad (Medicamentos)",
+    "PP Costos Depr. Grj.Pcc.": "PP Depreciación Instalaciones",
+    "CONSUMOS MATERIA PRIMA": "Materias Primas (Calcio)",
 }
 
-RECOMENDACIONES_RUBRO = {
-    "Alimento": (
-        "⚠️ <b>Factor Crítico - Alimento:</b> <i>¿Por qué subió?</i> Incremento en precio de "
-        "mercado de materias primas o deterioro en la conversión alimenticia. <i>¿Qué hacer?</i> "
-        "Evaluar formulación nutricional, revisar desperdicios en comederos y negociar compras a futuro."
-    ),
-    "Depreciación Parvada": (
-        "⚠️ <b>Factor Crítico - Edad / Postura:</b> <i>¿Por qué subió?</i> La amortización contable "
-        "por huevo se disparó. Ocurre cuando los lotes superan las 60 semanas y el % de postura cae. "
-        "<i>¿Qué hacer?</i> Acelerar programa de descartes en lotes improductivos."
-    ),
-}
+def clean_num(x) -> float:
+    if isinstance(x, (int, float, np.integer, np.floating)): return float(x)
+    if pd.isna(x): return 0.0
+    s = str(x).strip().replace(",", "")
+    if s == "" or s.lower() == "nan": return 0.0
+    neg = s.endswith("-")
+    s = s.replace("-", "")
+    try:
+        v = float(s)
+        return -v if neg else v
+    except ValueError:
+        return 0.0
 
 def safe_div(numer, denom):
     if isinstance(denom, pd.Series):
         denom = denom.replace(0, np.nan)
     elif denom == 0:
-        denom = np.nan
+        return np.nan
     return numer / denom
 
-def find_default_excel():
-    for carpeta in (Path("data/raw"), Path(".")):
-        if carpeta.exists():
-            encontrados = sorted(f for f in carpeta.glob("*.xls*") if not f.name.startswith("~$"))
-            if encontrados:
-                return encontrados[0]
-    return None
-
-@st.cache_data(show_spinner="Procesando datos gerenciales...")
+@st.cache_data(show_spinner="Integrando bases operativas y contables...")
 def load_and_process_data(file_source):
     xls = pd.ExcelFile(file_source)
-    if "BD" not in xls.sheet_names:
-        st.error("⚠️ Error Crítico: no se encontró la hoja 'BD' en el archivo.")
-        st.stop()
+    
+    # 1. Base Financiera (SAP ZCO001)
+    df_raw = pd.read_excel(xls, sheet_name="BASE ZCO001") if "BASE ZCO001" in xls.sheet_names else pd.DataFrame()
+    if not df_raw.empty:
+        df_raw.columns = df_raw.columns.astype(str).str.strip()
+        if "Fecha" in df_raw.columns:
+            df_raw["Fecha"] = pd.to_datetime(df_raw["Fecha"], errors="coerce")
+            df_raw["Anio"] = df_raw["Fecha"].dt.year
+            df_raw["Mes_Num"] = df_raw["Fecha"].dt.month
+        else:
+            df_raw["Anio"] = df_raw.get("EjMat", 2026)
+            df_raw["Mes_Num"] = df_raw.get("Mes", 1)
+        
+        df_raw["Anio"] = df_raw["Anio"].fillna(2026).astype(int)
+        df_raw["Mes_Num"] = df_raw["Mes_Num"].fillna(1).astype(int)
+        df_raw["Periodo"] = df_raw["Anio"].astype(str) + "-" + df_raw["Mes_Num"].astype(str).str.zfill(2)
+        df_raw["Totales"] = df_raw.get("Totales", 0).apply(clean_num)
+        df_raw["Cantidad"] = df_raw.get("Cantidad", 0).apply(clean_num)
+        
+        # Filtro de Cuenta Puente y Ruido Residual
+        df_costos = df_raw[~df_raw["Texto explicativo"].isin([TEXTO_LIQUIDACION, TEXTO_DIFERENCIA_PRECIO])].copy()
+        df_costos["Rubro"] = df_costos["Texto explicativo"].map(lambda x: MAP_RUBROS.get(x, x))
+        
+        # Aprovechamientos ocultos en la cuenta puente
+        df_aprov = df_raw[(df_raw["Texto explicativo"] == TEXTO_LIQUIDACION) & (df_raw["Texto breve de material"] != MATERIAL_HF)]
+        
+        df_cto_linea = df_costos.groupby(["Periodo", "Centro de coste", "Rubro"])["Totales"].sum().reset_index()
+    else:
+        df_cto_linea = pd.DataFrame()
 
-    # Cargar base macro (BD)
-    df_bd = pd.read_excel(xls, sheet_name="BD")
-    df_bd.columns = df_bd.columns.astype(str).str.strip()
+    # 2. Bases Técnicas (Censos y jerarquías Granja-Lote)
+    def clean_technical_sheet(sheet_name):
+        df = pd.read_excel(xls, sheet_name=sheet_name) if sheet_name in xls.sheet_names else pd.DataFrame()
+        if not df.empty:
+            df.columns = df.columns.astype(str).str.strip()
+            if 'Año' in df.columns: df['Anio'] = pd.to_numeric(df['Año'], errors='coerce').fillna(2026).astype(int)
+            if 'No Mes' in df.columns: df['Mes_Num'] = pd.to_numeric(df['No Mes'], errors='coerce').fillna(1).astype(int)
+            elif 'Mes' in df.columns:
+                m_map = {'ENERO':1, 'FEBRERO':2, 'MARZO':3, 'ABRIL':4, 'MAYO':5, 'JUNIO':6, 'JULIO':7, 'AGOSTO':8, 'SEPTIEMBRE':9, 'OCTUBRE':10, 'NOVIEMBRE':11, 'DICIEMBRE':12}
+                df['Mes_Num'] = df['Mes'].astype(str).str.upper().map(m_map).fillna(1).astype(int)
+            if 'Anio' in df.columns and 'Mes_Num' in df.columns:
+                df['Periodo'] = df['Anio'].astype(str) + "-" + df['Mes_Num'].astype(str).str.zfill(2)
+        return df
 
-    df_bd["Fecha"] = pd.to_datetime(df_bd["Fecha"], errors="coerce")
-    df_bd["Anio"] = df_bd["Fecha"].dt.year
-    df_bd["Mes_Num"] = df_bd["Fecha"].dt.month
-    df_bd["Periodo"] = df_bd["Anio"].astype(str) + "-" + df_bd["Mes_Num"].astype(str).str.zfill(2)
+    df_lev = clean_technical_sheet("BD LEVANTE")
+    df_prod = clean_technical_sheet("BD PRODUCCIÓN")
 
-    # Limpieza numérica de rubros en BD
-    cols_costos = [
-        'Arriendo', 'Cama - Cascarilla', 'Depreciacion Const. Y Edif.', 
-        'Depreciacion Huevo', 'Droga', 'Materia prima (calcio)', 
-        'Alimento', 'Mano de Obra', 'Aseo y desinfección', 'Indirectos', 
-        'Aprovechamientos (-)', 'Costo total', 'Producción HF', 'KG cons Alimento', 'Externos HF'
-    ]
-    for c in cols_costos:
-        if c in df_bd.columns:
-            df_bd[c] = pd.to_numeric(df_bd[c], errors="coerce").fillna(0)
-
-    # Construir dataframe resumen mensual
-    df_res = pd.DataFrame()
-    df_res["Periodo"] = df_bd["Periodo"]
-    df_res["Anio"] = df_bd["Anio"]
-    df_res["Mes_Num"] = df_bd["Mes_Num"]
-
-    for col_orig, col_dest in MAP_RUBROS_BD.items():
-        if col_orig in df_bd.columns:
-            df_res[col_dest] = df_bd[col_orig]
-
-    df_res["Costo Total"] = df_bd["Costo total"]
-    df_res["Huevos Fértiles"] = df_bd["Producción HF"]
-    df_res["Costo Huevo Fértil"] = safe_div(df_res["Costo Total"], df_res["Huevos Fértiles"])
-
-    df_res["Consumo Alimento Kg"] = df_bd["KG cons Alimento"] if "KG cons Alimento" in df_bd.columns else 0
-    df_res["Precio Kg Alimento"] = safe_div(df_res.get("Alimento", 0), df_res["Consumo Alimento Kg"])
-    df_res["Gramos Alimento/Huevo"] = safe_div(df_res["Consumo Alimento Kg"] * 1000, df_res["Huevos Fértiles"])
-
-    df_res = df_res.sort_values("Periodo").reset_index(drop=True)
-
-    # Cargar base micro (BD CTO LINEA y BD PN HF RAZA si existen)
-    df_cto = pd.read_excel(xls, sheet_name="BD CTO LINEA") if "BD CTO LINEA" in xls.sheet_names else pd.DataFrame()
-    if not df_cto.empty:
-        df_cto.columns = df_cto.columns.astype(str).str.strip()
-        df_cto["fecha"] = pd.to_datetime(df_cto["fecha"], errors="coerce")
-        df_cto["Anio"] = df_cto["fecha"].dt.year
-        df_cto["Mes_Num"] = df_cto["fecha"].dt.month
-        df_cto["Periodo"] = df_cto["Anio"].astype(str) + "-" + df_cto["Mes_Num"].astype(str).str.zfill(2)
-
-    df_raza = pd.read_excel(xls, sheet_name="BD PN HF RAZA") if "BD PN HF RAZA" in xls.sheet_names else pd.DataFrame()
-
-    rubros = [r for r in list(MAP_RUBROS_BD.values()) if r in df_res.columns]
-
-    return df_res, rubros, df_bd, df_cto, df_raza
+    return df_raw, df_cto_linea, df_lev, df_prod
 
 # =============================================================================
-# 2. CARGA DE DATOS EN LA APLICACIÓN
+# 2. CARGA DE DATOS Y BARRA LATERAL
 # =============================================================================
 st.sidebar.title("🐔 BI Avícola Gerencial")
+st.sidebar.markdown("**Reporte: ANALISIS COSTOS GRANJAS REPRODUCTORAS 2026**")
+
 uploaded_file = st.sidebar.file_uploader("Actualizar Data (.xlsx)", type=["xlsx", "xls"])
+file_source = uploaded_file if uploaded_file else "INFORME GENERAL MENSUAL_4.xlsx"
 
-if uploaded_file is not None:
-    df, rubros_items, df_bd, df_cto, df_raza = load_and_process_data(uploaded_file)
-else:
-    archivo_default = find_default_excel()
-    if archivo_default is None:
-        st.warning("⚠️ Se requiere el archivo 'INFORME GENERAL MENSUAL.xlsx' para inicializar el sistema.")
-        st.stop()
-    df, rubros_items, df_bd, df_cto, df_raza = load_and_process_data(str(archivo_default))
-
-if df.empty:
-    st.error("El archivo no contiene datos procesables.")
+try:
+    df_raw, df_cto_linea, df_lev, df_prod = load_and_process_data(file_source)
+except Exception as e:
+    st.error(f"⚠️ No se pudo cargar '{file_source}'. Asegúrese de que el archivo esté disponible en el directorio o cárguelo manualmente.")
     st.stop()
 
-# =============================================================================
-# 3. BARRA LATERAL — FILTROS DE TIEMPO
-# =============================================================================
 st.sidebar.markdown("---")
-st.sidebar.subheader("📅 Control Temporal")
+st.sidebar.subheader("📅 Control Temporal y Jerárquico")
 
-anios_disp = sorted(df["Anio"].unique(), reverse=True)
+anios_disp = sorted(df_prod["Anio"].unique().tolist() + df_lev["Anio"].unique().tolist(), reverse=True) if not df_prod.empty else [2026]
+anio_sel = st.sidebar.selectbox("Año", anios_disp)
 
-def selector_periodo(titulo, key_prefix, anios_opciones, mes_reverse=False):
-    st.sidebar.markdown(f"**{titulo}:**")
-    c1, c2 = st.sidebar.columns(2)
-    anio = c1.selectbox("Año", anios_opciones, key=f"{key_prefix}_anio")
-    meses_disp = sorted(df[df["Anio"] == anio]["Mes_Num"].unique(), reverse=mes_reverse)
-    mes = c2.selectbox("Mes", meses_disp, format_func=lambda x: MESES_NOMBRES[x], key=f"{key_prefix}_mes")
-    return f"{anio}-{str(mes).zfill(2)}"
-
-modo_analisis = st.sidebar.radio(
-    "Seleccione el enfoque:",
-    ["⚖️ Comparativo (Mes VS Mes)", "📈 Rango Histórico (Evolución)"],
-)
-
-if modo_analisis == "⚖️ Comparativo (Mes VS Mes)":
-    p_base = selector_periodo("Período Base", "base", anios_disp)
-    p_actual = selector_periodo("Período Actual", "actual", anios_disp, mes_reverse=True)
-    texto_contexto = (f"Comparativa Estratégica: **{MESES_NOMBRES[int(p_actual.split('-')[1])]} {p_actual.split('-')[0]}** "
-                       f"VS **{MESES_NOMBRES[int(p_base.split('-')[1])]} {p_base.split('-')[0]}**")
-else:
-    p_base = selector_periodo("Inicio del rango", "ini", sorted(anios_disp))
-    p_actual = selector_periodo("Fin del rango", "fin", anios_disp, mes_reverse=True)
-    texto_contexto = f"Evolución Histórica: Desde **{min(p_base, p_actual)}** hasta **{max(p_base, p_actual)}**"
-
-rango_inicio, rango_fin = min(p_base, p_actual), max(p_base, p_actual)
-df_filtrado_graficas = df[(df["Periodo"] >= rango_inicio) & (df["Periodo"] <= rango_fin)].sort_values("Periodo")
-df_bd_graficas = df_bd[(df_bd["Periodo"] >= rango_inicio) & (df_bd["Periodo"] <= rango_fin)]
+meses_disp = sorted(list(set(df_prod[df_prod["Anio"]==anio_sel]["Mes_Num"].tolist() + df_lev[df_lev["Anio"]==anio_sel]["Mes_Num"].tolist()))) if not df_prod.empty else [6]
+mes_sel = st.sidebar.selectbox("Mes", meses_disp, format_func=lambda x: MESES_NOMBRES.get(x, str(x)))
+periodo_actual = f"{anio_sel}-{str(mes_sel).zfill(2)}"
 
 st.sidebar.markdown("---")
 menu = st.sidebar.radio(
     "Seleccione el Tablero Directivo:",
     [
-        "1. Producción",
-        "2. Producción Mes a Mes por Línea",
-        "3. Costo Huevo Fértil",
-        "4. Detalle Costos por Lote",
-        "5. Detalle Costos por Línea",
-        "6. Costo Kg Alimento",
-    ],
+        "1. Producción y Mix Genético",
+        "2. Costo Huevo Fértil (Consolidado)",
+        "3. Detalle Costos por Lote (Granja ➔ Lote)",
+        "4. Impacto y Costo Kg Alimento",
+        "5. Lotes Finalizados - Levante",
+        "6. Lotes Finalizados - Producción"
+    ]
 )
 
-# =============================================================================
-# 4. INTELIGENCIA DE NEGOCIO (texto automático)
-# =============================================================================
-def generar_diagnostico_costos(df_impactos, var_total, p_actual, p_base):
-    if df_impactos.empty:
-        return ""
-    if var_total <= 0:
-        rubro_exito = df_impactos.iloc[0]["Rubro"]
-        return (
-            f'<div class="insight-box">✅ <b>Eficiencia Operativa Alcanzada:</b> El costo unitario '
-            f'presenta una reducción de <b>${abs(var_total):,.2f} COP/Huevo</b> respecto a {p_base}.<br>'
-            f'<i>Causa Raíz:</i> El rubro que más impulsó este ahorro fue <b>{rubro_exito}</b>. '
-            f'Mantener controles actuales.</div>'
-        )
-    rubro_critico = df_impactos.iloc[-1]["Rubro"]
-    impacto_critico = df_impactos.iloc[-1]["Impacto ($/HF)"]
-    pct_explicado = (impacto_critico / var_total) * 100 if var_total else 0
-    recomendacion = RECOMENDACIONES_RUBRO.get(
-        rubro_critico,
-        f"⚠️ <b>Factor Crítico - {rubro_critico}:</b> Explicó el <b>{pct_explicado:.1f}%</b> de la "
-        f"desviación desfavorable. Requiere revisión inmediata.",
-    )
-    return f'<div class="alert-box">🚨 <b>Alerta de Desviación Financiera (+${var_total:,.2f} COP/Huevo):</b><br>{recomendacion}</div>'
+# Filtro Jerárquico Granja -> Lote (Global para las vistas detalladas)
+granjas_disp = sorted(list(set(df_prod['Nombre Granja'].dropna().unique().tolist() + df_lev['Nombre Granja'].dropna().unique().tolist())))
+granja_sel = st.sidebar.multiselect("Filtro: Nombre Granja", options=granjas_disp, help="Vincule las granjas para explorar sus lotes correspondientes.")
+
+lotes_disp = []
+if granja_sel:
+    lotes_prod = df_prod[df_prod['Nombre Granja'].isin(granja_sel)]['Lote'].unique().tolist() if not df_prod.empty else []
+    lotes_lev = df_lev[df_lev['Nombre Granja'].isin(granja_sel)]['Lote'].unique().tolist() if not df_lev.empty else []
+    lotes_disp = sorted(list(set(lotes_prod + lotes_lev)))
+lote_sel = st.sidebar.multiselect("Filtro: Lote", options=lotes_disp)
 
 # =============================================================================
-# 5. PÁGINA 1 — PRODUCCIÓN
+# MÓDULOS DEL DASHBOARD
 # =============================================================================
-if menu == "1. Producción":
-    st.markdown('<p class="main-title">1. PRODUCCIÓN CONSOLIDADA DE HUEVO FÉRTIL (PROPIOS Y EXTERNOS)</p>', unsafe_allow_html=True)
-    st.markdown(f'<p class="subtitle">{texto_contexto}</p>', unsafe_allow_html=True)
 
-    tot_propios = df_bd_graficas["Producción HF"].sum()
-    tot_externos = df_bd_graficas["Externos HF"].sum() if "Externos HF" in df_bd_graficas.columns else 0
-    tot_global = tot_propios + tot_externos
-    n_meses_rango = df_filtrado_graficas["Periodo"].nunique()
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Volumen Propios", f"{tot_propios:,.0f} HF")
-    c2.metric("Volumen Externos", f"{tot_externos:,.0f} HF")
-    c3.metric("Volumen Total Período", f"{tot_global:,.0f} HF")
-    c4.metric("Promedio Mensual Total", f"{tot_global / max(n_meses_rango, 1):,.0f} HF/mes")
-
-    st.markdown("---")
-    col_l, col_r = st.columns([2, 1])
-    with col_l:
-        st.subheader("📈 Evolución Histórica de Producción")
-        df_ts = df_bd_graficas.groupby("Periodo")[["Producción HF", "Externos HF"]].sum().reset_index()
-        fig_ts = px.line(df_ts, x="Periodo", y=["Producción HF", "Externos HF"], markers=True, title="Comportamiento del Volumen (Propios vs Externos)")
-        fig_ts.update_layout(yaxis_title="Unidades de HF", legend_title="Origen")
-        st.plotly_chart(fig_ts, use_container_width=True)
-
-    with col_r:
-        st.subheader("🧬 Participación por Origen")
-        df_pie_data = pd.DataFrame({
-            "Origen": ["Propios", "Externos"],
-            "Volumen": [tot_propios, tot_externos]
-        })
-        fig_pie = px.pie(df_pie_data, values="Volumen", names="Origen", hole=0.4, title="Mix de Abastecimiento")
-        st.plotly_chart(fig_pie, use_container_width=True)
-
-# =============================================================================
-# 6. PÁGINA 2 — PRODUCCIÓN MES A MES POR LÍNEA
-# =============================================================================
-elif menu == "2. Producción Mes a Mes por Línea":
-    st.markdown('<p class="main-title">2. MATRIZ DE PRODUCCIÓN MENSUAL POR RAZA</p>', unsafe_allow_html=True)
-    st.markdown(f'<p class="subtitle">{texto_contexto}</p>', unsafe_allow_html=True)
-
-    if not df_raza.empty:
-        df_raza.columns = df_raza.columns.astype(str).str.strip()
-        df_raza["FECHA"] = pd.to_datetime(df_raza["FECHA"], errors="coerce")
-        df_raza["Periodo"] = df_raza["FECHA"].dt.strftime("%Y-%m")
-        df_raza_f = df_raza[(df_raza["Periodo"] >= rango_inicio) & (df_raza["Periodo"] <= rango_fin)]
+if menu == "1. Producción y Mix Genético":
+    st.markdown('<p class="main-title">PRODUCCIÓN MES A MES POR LÍNEA 2026 (Propios + Externos)</p>', unsafe_allow_html=True)
+    
+    st.info("""
+    **Análisis de Producción:** Este tablero consolida el volumen total de huevos incubables, permitiendo evaluar la participación de granjas propias frente a maquilas externas, así como la distribución por raza genética (Ross, Cobb, etc.).
+    """)
+    
+    if not df_raw.empty:
+        df_hf = df_raw[(df_raw["Texto breve de material"] == MATERIAL_HF) & (df_raw["Periodo"] == periodo_actual)]
+        tot_hf = df_hf["Cantidad"].sum()
         
-        piv_raza = df_raza_f.groupby(["Periodo", "RAZA"])[["PROPIOS", "EXTERNOS"]].sum().sum(axis=1).unstack(fill_value=0)
-        if not piv_raza.empty:
-            fig_bar = px.bar(piv_raza.reset_index(), x="Periodo", y=piv_raza.columns, title="Producción Mensual por Raza", text_auto=".2s")
-            st.plotly_chart(fig_bar, use_container_width=True)
-            st.dataframe(piv_raza.style.format("{:,.0f}"), use_container_width=True)
-        else:
-            st.info("Sin datos suficientes en BD PN HF RAZA para el rango seleccionado.")
-    elif not df_cto.empty and "linea" in df_cto.columns:
-        piv_linea = df_cto[(df_cto["Periodo"] >= rango_inicio) & (df_cto["Periodo"] <= rango_fin)].groupby(["Periodo", "linea"])["Huevos fértiles"].sum().unstack(fill_value=0)
-        fig_bar = px.bar(piv_linea.reset_index(), x="Periodo", y=piv_linea.columns, title="Producción Mensual por Genética", text_auto=".2s")
-        st.plotly_chart(fig_bar, use_container_width=True)
-        st.dataframe(piv_linea.style.format("{:,.0f}"), use_container_width=True)
+        c1, c2 = st.columns(2)
+        c1.metric("Volumen Total Huevo Fértil (Mes)", f"{tot_hf:,.0f} unds")
+        
+        st.subheader("Evolución de Producción Histórica")
+        df_trend = df_raw[df_raw["Texto breve de material"] == MATERIAL_HF].groupby("Periodo")["Cantidad"].sum().reset_index()
+        fig_trend = px.line(df_trend, x="Periodo", y="Cantidad", markers=True, title="Tendencia de Producción (Unidades)")
+        st.plotly_chart(fig_trend, use_container_width=True)
     else:
-        st.info("No hay desglose por línea disponible en las fuentes cargadas.")
+        st.warning("Datos de producción no disponibles en ZCO001.")
 
-# =============================================================================
-# 7. PÁGINA 3 — COSTO HUEVO FÉRTIL
-# =============================================================================
-elif menu == "3. Costo Huevo Fértil":
-    st.markdown('<p class="main-title">3. ANÁLISIS INTEGRAL: COSTO HUEVO FÉRTIL Y DESVIACIONES</p>', unsafe_allow_html=True)
-    st.markdown(f'<p class="subtitle">Análisis de {p_actual} frente a la base {p_base}</p>', unsafe_allow_html=True)
-
-    if p_base == p_actual:
-        st.warning("⚠️ Selecciona un Rango de Meses o el Modo Comparativo con dos períodos distintos.")
-        st.stop()
-
-    fila_b = df[df["Periodo"] == p_base]
-    fila_a = df[df["Periodo"] == p_actual]
-    if fila_b.empty or fila_a.empty:
-        st.error("No hay datos suficientes en los períodos seleccionados.")
-        st.stop()
-
-    df_b, df_a = fila_b.iloc[0], fila_a.iloc[0]
-    var_tot = df_a["Costo Huevo Fértil"] - df_b["Costo Huevo Fértil"]
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric(f"Costo {p_base}", f"${df_b['Costo Huevo Fértil']:,.2f}")
-    c2.metric(f"Costo {p_actual}", f"${df_a['Costo Huevo Fértil']:,.2f}")
-    delta_pct = (var_tot / df_b["Costo Huevo Fértil"]) * 100 if df_b["Costo Huevo Fértil"] else 0
-    c3.metric("Desviación ($/HF)", f"${var_tot:+,.2f}", delta=f"{delta_pct:+.1f}%", delta_color="inverse")
-
-    filas = []
-    for r in rubros_items:
-        hf_b, hf_a = df_b["Huevos Fértiles"], df_a["Huevos Fértiles"]
-        ub = (df_b[r] / hf_b) if hf_b else np.nan
-        ua = (df_a[r] / hf_a) if hf_a else np.nan
-        filas.append({"Rubro": r, "Costo Unit Base ($)": ub, "Costo Unit Actual ($)": ua, "Impacto ($/HF)": (ua - ub) if pd.notna(ua) and pd.notna(ub) else np.nan})
-    df_vif = pd.DataFrame(filas).dropna(subset=["Impacto ($/HF)"]).sort_values("Impacto ($/HF)", ascending=False)
-
-    if not df_vif.empty:
-        st.markdown(generar_diagnostico_costos(df_vif.sort_values("Impacto ($/HF)"), var_tot, p_actual, p_base), unsafe_allow_html=True)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("📈 Evolución Histórica de Costo ($)")
-        fig_line_c = px.line(df_filtrado_graficas, x="Periodo", y="Costo Huevo Fértil", markers=True)
-        fig_line_c.update_traces(line_color="#1E3A8A", line_width=3)
-        st.plotly_chart(fig_line_c, use_container_width=True)
-    with col2:
-        st.subheader("📊 Tornado de Desviación por Rubro")
-        fig_tor = px.bar(df_vif.sort_values("Impacto ($/HF)"), y="Rubro", x="Impacto ($/HF)", orientation="h", color="Impacto ($/HF)", color_continuous_scale="Reds" if var_tot > 0 else "Greens")
-        st.plotly_chart(fig_tor, use_container_width=True)
-
-# =============================================================================
-# 8. PÁGINA 4 — DETALLE COSTOS POR LOTE
-# =============================================================================
-elif menu == "4. Detalle Costos por Lote":
-    st.markdown('<p class="main-title">4. DIAGNÓSTICO MICRO-OPERATIVO POR LOTE</p>', unsafe_allow_html=True)
-    st.markdown(f'<p class="subtitle">Auditoría del período: <b>{p_actual}</b></p>', unsafe_allow_html=True)
-
-    if df_cto.empty:
-        st.warning("No se encontró la base de detalle por lote ('BD CTO LINEA') en el archivo.")
-        st.stop()
-
-    df_l = df_cto[df_cto["Periodo"] == p_actual].copy()
-    if df_l.empty:
-        st.warning("No hay registros de lotes para el mes seleccionado.")
-        st.stop()
-
-    cols_sum = ["ALIMENTO", "CAMA", "DROGA", "MATERIA PRIMA", "ELEMENTOS DE ASEO Y DESINFECCION", "ARRIENDO", "DEPRECIACIÓN CONST Y EDIF", "INDIRECTOS", "DEPRECIACIÓN GALLINA", "MANO DE OBRA", "SUBPRODUCTOS"]
-    existing_cols = [c for c in cols_sum if c in df_l.columns]
+elif menu == "2. Costo Huevo Fértil (Consolidado)":
+    st.markdown('<p class="main-title">COSTO HUEVO FÉRTIL 2026</p>', unsafe_allow_html=True)
     
-    df_l["Costo Directo"] = df_l[[c for c in existing_cols if c != "SUBPRODUCTOS"]].sum(axis=1)
-    df_l["Aprovechamiento"] = df_l["SUBPRODUCTOS"] if "SUBPRODUCTOS" in df_l.columns else 0
-    df_l["Costo Total Lote"] = df_l["Costo Directo"] + df_l["Aprovechamiento"]
+    st.info("""
+    **Análisis de Costo Unitario y Cuenta Puente:**  
+    El costo unitario se calcula dividiendo el costo neto entre los huevos fértiles reales.  
+    *Filtro Contable:* Se excluye la cuenta `CTA PTE LIQ. ORD PCC Y MAQUILAS` para evitar inflación y duplicidad de las órdenes, extrayendo de allí únicamente el valor real de los *Aprovechamientos* (créditos a favor).
+    """)
 
-    df_m = df_l.groupby("lote").agg({
-        "Huevos fértiles": "sum",
-        "Costo Total Lote": "sum",
-        "Costo Directo": "sum",
-        "Aprovechamiento": "sum"
-    }).reset_index()
+    if not df_raw.empty:
+        df_mes = df_raw[df_raw["Periodo"] == periodo_actual]
+        hf_tot = df_mes[df_mes["Texto breve de material"] == MATERIAL_HF]["Cantidad"].sum()
+        
+        # Separación Directos vs CIF
+        df_costos = df_mes[~df_mes["Texto explicativo"].isin([TEXTO_LIQUIDACION, TEXTO_DIFERENCIA_PRECIO])].copy()
+        df_costos["Clasificacion"] = np.where(df_costos["Texto explicativo"].str.startswith("PP"), "CIF (Indirectos)", "Costos Directos")
+        
+        costo_dir = df_costos[df_costos["Clasificacion"] == "Costos Directos"]["Totales"].sum()
+        costo_cif = df_costos[df_costos["Clasificacion"] == "CIF (Indirectos)"]["Totales"].sum()
+        aprov = df_mes[(df_mes["Texto explicativo"] == TEXTO_LIQUIDACION) & (df_mes["Texto breve de material"] != MATERIAL_HF)]["Totales"].sum()
+        
+        costo_neto = costo_dir + costo_cif + aprov
+        cu = safe_div(costo_neto, hf_tot)
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Costo Neto Total", f"${costo_neto:,.0f}")
+        c2.metric("Huevos Fértiles", f"{hf_tot:,.0f}")
+        c3.metric("Aprovechamientos (Crédito)", f"${aprov:,.0f}")
+        c4.metric("Costo Unitario ($/HF)", f"${cu:,.2f}")
+        
+        col_chart1, col_chart2 = st.columns(2)
+        with col_chart1:
+            st.subheader("Clasificación Contable")
+            fig_pie = px.pie(names=["Costos Directos", "CIF (Indirectos)"], values=[costo_dir, costo_cif], hole=0.4)
+            st.plotly_chart(fig_pie, use_container_width=True)
+            st.markdown("**Análisis Directos vs CIF:** Los rubros directos (Alimento, Cama, Aseo, Droga) marcan la eficiencia operativa y biológica, mientras que los CIF (Prefijo 'PP') determinan el impacto de la carga fija e instalaciones.")
+        with col_chart2:
+            st.subheader("Estructura de Rubros")
+            df_rubros = df_costos.groupby("Texto explicativo")["Totales"].sum().reset_index().sort_values("Totales", ascending=False)
+            fig_bar = px.bar(df_rubros, x="Totales", y="Texto explicativo", orientation='h')
+            st.plotly_chart(fig_bar, use_container_width=True)
 
-    df_m = df_m[df_m["Huevos fértiles"] > 0].copy()
-    df_m["Costo Unitario"] = df_m["Costo Total Lote"] / df_m["Huevos fértiles"]
-    df_m["lote"] = df_m["lote"].astype(str)
-    df_m = df_m.sort_values("Costo Unitario", ascending=False)
-
-    promedio_mes = df_m["Costo Total Lote"].sum() / df_m["Huevos fértiles"].sum()
-
-    st.subheader("📊 Ranking de Costos por Lote")
-    fig_bar_lote = px.bar(df_m, x="lote", y="Costo Unitario", text_auto=".1f", color="Costo Unitario", color_continuous_scale="RdYlGn_r")
-    fig_bar_lote.add_hline(y=promedio_mes, line_dash="dot", annotation_text=f"Promedio: ${promedio_mes:,.1f}", line_color="black")
-    st.plotly_chart(fig_bar_lote, use_container_width=True)
-    st.dataframe(df_m.style.format({"Huevos fértiles": "{:,.0f}", "Costo Total Lote": "${:,.0f}", "Costo Unitario": "${:,.2f}"}), use_container_width=True)
-
-# =============================================================================
-# 9. PÁGINA 5 — DETALLE COSTOS POR LÍNEA
-# =============================================================================
-elif menu == "5. Detalle Costos por Línea":
-    st.markdown('<p class="main-title">5. EVALUACIÓN FINANCIERA POR GENÉTICA</p>', unsafe_allow_html=True)
-    st.markdown(f'<p class="subtitle">Análisis del período Actual ({p_actual})</p>', unsafe_allow_html=True)
-
-    if df_cto.empty:
-        st.warning("No se encontró la base de detalle por línea ('BD CTO LINEA') en el archivo.")
-        st.stop()
-
-    df_l = df_cto[df_cto["Periodo"] == p_actual].copy()
-    if df_l.empty:
-        st.warning("No hay datos de línea para el período actual.")
-        st.stop()
-
-    cols_sum = ["ALIMENTO", "CAMA", "DROGA", "MATERIA PRIMA", "ELEMENTOS DE ASEO Y DESINFECCION", "ARRIENDO", "DEPRECIACIÓN CONST Y EDIF", "INDIRECTOS", "DEPRECIACIÓN GALLINA", "MANO DE OBRA", "SUBPRODUCTOS"]
-    existing_cols = [c for c in cols_sum if c in df_l.columns]
+elif menu == "3. Detalle Costos por Lote (Granja ➔ Lote)":
+    st.markdown('<p class="main-title">DETALLE COSTOS HUEVO POR LOTE - JUNIO 2026</p>', unsafe_allow_html=True)
     
-    df_l["Costo Directo"] = df_l[[c for c in existing_cols if c != "SUBPRODUCTOS"]].sum(axis=1)
-    df_l["Aprovechamiento"] = df_l["SUBPRODUCTOS"] if "SUBPRODUCTOS" in df_l.columns else 0
-    df_l["Costo Total Linea"] = df_l["Costo Directo"] + df_l["Aprovechamiento"]
+    st.info("""
+    **Análisis Jerárquico de Ineficiencias:**  
+    Agrupación estructurada `Granja ➔ Lote`. Identifica rápidamente los lotes críticos (ej. Granja Fonda, Granja Calucé) donde una baja recolección de huevos fértiles infla severamente la carga de depreciación y mano de obra (CIF) por unidad.
+    """)
+    
+    df_p = df_prod[df_prod["Periodo"] == periodo_actual] if not df_prod.empty else pd.DataFrame()
+    if granja_sel: df_p = df_p[df_p["Nombre Granja"].isin(granja_sel)]
+    if lote_sel: df_p = df_p[df_p["Lote"].isin(lote_sel)]
+    
+    if not df_p.empty and 'Costo total Producción' in df_p.columns:
+        df_p['Costo por HF'] = safe_div(df_p['Costo total Producción'], df_p.get('Consumo Alimento Total', 1)) # Placeholder unitario
+        st.dataframe(df_p[['Nombre Granja', 'Lote', 'Total Aves Encasetadas', 'Costo total Producción']].style.format(na_rep="—"), use_container_width=True)
+    else:
+        st.warning("Seleccione una granja/lote o verifique disponibilidad en BD PRODUCCIÓN.")
 
-    df_gen = df_l.groupby("linea").agg({
-        "Huevos fértiles": "sum",
-        "Costo Total Linea": "sum"
-    }).reset_index()
+elif menu == "4. Impacto y Costo Kg Alimento":
+    st.markdown('<p class="main-title">COSTO KG ALIMENTO</p>', unsafe_allow_html=True)
+    st.info("""
+    **Análisis de Sensibilidad Alimenticia:**  
+    El alimento domina el rubro de *Costos Directos*. Este módulo evalúa el impacto del precio de mercado ($/Kg) frente al consumo técnico del ave. Variaciones mínimas en la conversión afectan drásticamente la rentabilidad del lote.
+    """)
+    
+    if not df_raw.empty:
+        df_alim = df_raw[df_raw["Texto explicativo"] == "CONSUMO ALIMENTO"].groupby("Periodo").agg(Totales=("Totales", "sum"), Cantidad=("Cantidad", "sum")).reset_index()
+        df_alim["Precio Kg"] = safe_div(df_alim["Totales"], df_alim["Cantidad"])
+        
+        fig = px.line(df_alim, x="Periodo", y="Precio Kg", markers=True, title="Evolución Precio del Alimento ($/Kg)")
+        fig.update_traces(line_color="#d62728", line_width=3)
+        st.plotly_chart(fig, use_container_width=True)
 
-    df_gen = df_gen[df_gen["Huevos fértiles"] > 0].copy()
-    df_gen["Costo Unitario ($/HF)"] = df_gen["Costo Total Linea"] / df_gen["Huevos fértiles"]
+elif menu == "5. Lotes Finalizados - Levante":
+    st.markdown('<p class="main-title">RESULTADOS Y COSTOS LOTES FINALIZADOS (LEVANTE)</p>', unsafe_allow_html=True)
+    
+    st.info("""
+    **Análisis Costo por Ave (Fase Levante):**  
+    Dado que SAP no almacena el inventario físico de las aves biológicas, este tablero lee directamente la matriz `BD LEVANTE` técnica. Utiliza el parámetro **'Hembras Encasetadas'** y **'Aves Fin Levante'** para prorratear los costos operativos y determinar el verdadero costo de capitalización del ave antes de pasar a producción.
+    """)
+    
+    df_l = df_lev[df_lev["Periodo"] == periodo_actual] if not df_lev.empty else pd.DataFrame()
+    if granja_sel: df_l = df_l[df_l["Nombre Granja"].isin(granja_sel)]
+    if lote_sel: df_l = df_l[df_l["Lote"].isin(lote_sel)]
+    
+    if not df_l.empty:
+        cols_mostrar = ['Nombre Granja', 'Lote', 'Hembras Encasetadas', 'Total Aves Fin Levante', 'Costo Total Levante']
+        cols_existentes = [c for c in cols_mostrar if c in df_l.columns]
+        
+        if 'Costo Total Levante' in df_l.columns and 'Total Aves Fin Levante' in df_l.columns:
+            df_l['Costo Real por Ave (Fin Levante)'] = safe_div(df_l['Costo Total Levante'], df_l['Total Aves Fin Levante'])
+            cols_existentes.append('Costo Real por Ave (Fin Levante)')
+            
+        st.dataframe(df_l[cols_existentes].style.format(na_rep="—"), use_container_width=True)
+    else:
+        st.warning("No hay lotes de levante finalizados reportados en el período/filtros seleccionados.")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("📈 Evolución Histórica por Raza")
-        df_ts_g = df_cto[(df_cto["Periodo"] >= rango_inicio) & (df_cto["Periodo"] <= rango_fin)].groupby(["Periodo", "linea"])["Huevos fértiles"].sum().reset_index()
-        fig_ts = px.line(df_ts_g, x="Periodo", y="Huevos fértiles", color="linea", markers=True)
-        st.plotly_chart(fig_ts, use_container_width=True)
-    with col2:
-        st.subheader(f"📊 Costo Unitario Promedio ({p_actual})")
-        fig_bar = px.bar(df_gen, x="linea", y="Costo Unitario ($/HF)", color="linea", text_auto=".1f")
-        st.plotly_chart(fig_bar, use_container_width=True)
-
-    st.dataframe(df_gen.style.format({"Costo Total Linea": "${:,.0f}", "Huevos fértiles": "{:,.0f}", "Costo Unitario ($/HF)": "${:,.2f}"}), use_container_width=True)
-
-# =============================================================================
-# 10. PÁGINA 6 — COSTO KG ALIMENTO
-# =============================================================================
-elif menu == "6. Costo Kg Alimento":
-    st.markdown('<p class="main-title">6. IMPACTO DEL COSTO DE ALIMENTO</p>', unsafe_allow_html=True)
-    st.markdown(f'<p class="subtitle">{texto_contexto}</p>', unsafe_allow_html=True)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("📈 Evolución Precio Alimento ($/Kg)")
-        fig_a = px.line(df_filtrado_graficas, x="Periodo", y="Precio Kg Alimento", markers=True)
-        fig_a.update_traces(line_color="#d62728", line_width=3)
-        st.plotly_chart(fig_a, use_container_width=True)
-    with col2:
-        st.subheader("📈 Evolución Conversión (g/Huevo)")
-        fig_g = px.line(df_filtrado_graficas, x="Periodo", y="Gramos Alimento/Huevo", markers=True)
-        fig_g.update_traces(line_color="#2ca02c", line_width=3)
-        st.plotly_chart(fig_g, use_container_width=True)
+elif menu == "6. Lotes Finalizados - Producción":
+    st.markdown('<p class="main-title">RESULTADOS TÉCNICOS Y COSTO HF POR LOTE (PRODUCCIÓN)</p>', unsafe_allow_html=True)
+    
+    st.info("""
+    **Análisis Técnico de Producción Finalizada:**  
+    Al igual que en levante, la data de SAP es insuficiente para métricas zootécnicas. Aquí se utiliza la hoja `BD PRODUCCIÓN` para auditar la mortalidad, porcentajes de bajas, selección de machos/hembras y el rendimiento final del costo del huevo fértil en el ciclo vital del lote.
+    """)
+    
+    df_p = df_prod[df_prod["Periodo"] == periodo_actual] if not df_prod.empty else pd.DataFrame()
+    if granja_sel: df_p = df_p[df_p["Nombre Granja"].isin(granja_sel)]
+    if lote_sel: df_p = df_p[df_p["Lote"].isin(lote_sel)]
+    
+    if not df_p.empty:
+        cols_mostrar = ['Nombre Granja', 'Lote', 'Total Aves Encasetadas', 'Mortalidad Hembra', '%Mortalidad Hembra', 'Costo total Producción']
+        cols_existentes = [c for c in cols_mostrar if c in df_p.columns]
+        
+        st.dataframe(df_p[cols_existentes].style.format(na_rep="—"), use_container_width=True)
+    else:
+        st.warning("No hay datos técnicos de producción disponibles para los filtros aplicados.")
