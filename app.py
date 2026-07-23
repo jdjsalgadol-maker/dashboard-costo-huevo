@@ -1,9 +1,9 @@
 """
-Dashboard Ejecutivo — Costos Granjas Reproductoras 2026
-=======================================================
-Fuente principal: 'INFORME GENERAL MENSUAL_4.xlsx'.
+Dashboard Ejecutivo — Análisis de Costos Granjas Reproductoras 2026
+===================================================================
+Fuente principal: 'INFORME GENERAL MENSUAL_5.xlsx'.
 Integra finanzas (BD y BD CTO LINEA) y censos técnicos (BD LEVANTE y BD PRODUCCIÓN)
-para generar informes comparativos, análisis de variaciones (VIF) y costos unitarios.
+para generar informes comparativos, análisis de variaciones y costos unitarios.
 """
 
 from pathlib import Path
@@ -30,9 +30,8 @@ st.markdown("""
         background-color: #F8FAFC; padding: 15px; border-radius: 8px;
         border-left: 5px solid #1E3A8A; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
-    .insight-box { background-color: #ECFDF5; padding: 15px; border-left: 5px solid #10B981; border-radius: 5px; margin-bottom: 20px; color: #064E3B;}
+    .insight-box { background-color: #ECFDF5; padding: 15px; border-left: 5px solid #10B981; border-radius: 5px; margin-bottom: 20px; color: #064E3B; font-size: 14px;}
     .alert-box   { background-color: #FEF2F2; padding: 15px; border-left: 5px solid #EF4444; border-radius: 5px; margin-bottom: 20px; color: #7F1D1D;}
-    .warn-box    { background-color: #FFFBEB; padding: 15px; border-left: 5px solid #F59E0B; border-radius: 5px; margin-bottom: 20px; color: #78350F;}
     .stTabs [data-baseweb="tab-list"] { gap: 24px; }
     .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; font-weight: 600; }
     </style>
@@ -49,7 +48,7 @@ def safe_div(numer, denom):
     return numer / denom
 
 # =============================================================================
-# 1. MOTOR DE DATOS (ETL) NATIVO PARA INFORME GENERAL MENSUAL
+# 1. MOTOR DE DATOS (ETL) NATIVO
 # =============================================================================
 @st.cache_data(show_spinner="Integrando bases operativas y contables (SAP)...")
 def load_and_process_data(file_source):
@@ -84,7 +83,7 @@ def load_and_process_data(file_source):
             if c in df_cto.columns:
                 df_cto[c] = pd.to_numeric(df_cto[c], errors='coerce').fillna(0)
         
-        # Agrupación CIF vs Directos en la base de detalle
+        # Agrupación CIF vs Directos
         dir_cols = ['ALIMENTO', 'CAMA', 'DROGA', 'MATERIA PRIMA', 'ELEMENTOS DE ASEO Y DESINFECCION']
         cif_cols = ['DEPRECIACIÓN CONST Y EDIF', 'INDIRECTOS', 'DEPRECIACIÓN GALLINA', 'MANO DE OBRA', 'ARRIENDO']
         df_cto['Costos Directos'] = df_cto[[c for c in dir_cols if c in df_cto.columns]].sum(axis=1)
@@ -121,19 +120,18 @@ def load_and_process_data(file_source):
 st.sidebar.title("🐔 BI Avícola Gerencial")
 st.sidebar.markdown("**Reporte: ANALISIS COSTOS GRANJAS REPRODUCTORAS 2026**")
 
-uploaded_file = st.sidebar.file_uploader("Subir INFORME GENERAL MENSUAL_4.xlsx", type=["xlsx", "xls"])
+uploaded_file = st.sidebar.file_uploader("Subir Archivo Consolidado", type=["xlsx", "xls"])
 
 try:
-    if uploaded_file:
-        df_bd, df_cto, df_raza, df_lev, df_prod = load_and_process_data(uploaded_file)
-    else:
-        df_bd, df_cto, df_raza, df_lev, df_prod = load_and_process_data("INFORME GENERAL MENSUAL_4.xlsx")
+    # Se asegura el nombre verbatim requerido
+    file_source = uploaded_file if uploaded_file else "INFORME GENERAL MENSUAL_5.xlsx"
+    df_bd, df_cto, df_raza, df_lev, df_prod = load_and_process_data(file_source)
 except Exception as e:
-    st.error("⚠️ Por favor, carga tu archivo 'INFORME GENERAL MENSUAL_4.xlsx' en el panel lateral para iniciar el dashboard.")
+    st.error("⚠️ Por favor, carga tu archivo 'INFORME GENERAL MENSUAL_5.xlsx' en el panel lateral para iniciar el dashboard.")
     st.stop()
 
 # =============================================================================
-# 3. CONTROLES TEMPORALES (COMPARATIVO Y EVOLUTIVO)
+# 3. CONTROLES TEMPORALES
 # =============================================================================
 st.sidebar.markdown("---")
 st.sidebar.subheader("📅 Control Temporal")
@@ -165,7 +163,6 @@ else:
 
 rango_inicio, rango_fin = min(p_base, p_actual), max(p_base, p_actual)
 
-# Filtrado global de DataFrames por el rango seleccionado
 df_bd_f = df_bd[(df_bd["Periodo"] >= rango_inicio) & (df_bd["Periodo"] <= rango_fin)].sort_values("Periodo")
 df_cto_f = df_cto[(df_cto["Periodo"] >= rango_inicio) & (df_cto["Periodo"] <= rango_fin)].sort_values("Periodo")
 
@@ -188,11 +185,11 @@ menu = st.sidebar.radio(
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Filtros Jerárquicos Técnicos (Pestañas 3, 5 y 6)**")
 granjas_disp = sorted(list(set(df_prod['Nombre Granja'].dropna().unique().tolist() + df_lev['Nombre Granja'].dropna().unique().tolist()))) if not df_prod.empty else []
-granja_sel = st.sidebar.multiselect("Filtro: Nombre Granja", options=granjas_disp, help="Agrupa la información respetando la jerarquía Granja ➔ Lote.")
+granja_sel = st.sidebar.multiselect("Filtro: Nombre Granja", options=granjas_disp, help="Agrupa la información respetando la jerarquía.")
 
 lotes_disp = []
 if granja_sel:
-    # IMPORTANTE: Solución al TypeError. Convertimos a string y eliminamos nulos antes de concatenar y ordenar.
+    # IMPORTANTE: Se solucionó el TypeError forzando la conversión a string .astype(str) antes del set()
     lotes_p = df_prod[df_prod['Nombre Granja'].isin(granja_sel)]['Lote'].dropna().astype(str).unique().tolist() if not df_prod.empty else []
     lotes_l = df_lev[df_lev['Nombre Granja'].isin(granja_sel)]['Lote'].dropna().astype(str).unique().tolist() if not df_lev.empty else []
     lotes_disp = sorted(list(set(lotes_p + lotes_l)))
@@ -207,7 +204,7 @@ if menu == "1. Producción y Mix Genético":
     
     st.info("""
     **Análisis Ejecutivo de Producción:**  
-    La cantidad de Huevos Fértiles es el *denominador universal* en la avicultura. Cualquier caída en este volumen castiga severamente la absorción de los Costos Fijos (Depreciaciones y Mano de Obra). Controlar el balance entre la producción de granjas propias y el apalancamiento a través de externos (maquilas) es clave para cumplir el presupuesto de incubación.
+    La cantidad de **Huevos Fértiles** es el denominador universal en la avicultura. Cualquier caída en este volumen castiga severamente la absorción de los Costos Fijos (como Depreciaciones y Mano de Obra). Controlar el balance entre la producción de granjas propias y el apalancamiento a través de externos (maquilas) es vital para diluir la carga operativa.
     """)
     
     if not df_raza.empty:
@@ -240,8 +237,8 @@ elif menu == "2. Costo Huevo Fértil (Consolidado)":
 
     st.info("""
     **Análisis Directos vs CIF y Tratamiento de la 'Cuenta Puente':**  
-    1. **Cuenta Puente y Aprovechamientos:** Detectamos que la cuenta `CTA PTE LIQ. ORD PCC Y MAQUILAS` duplicaba las órdenes en SAP. Ya ha sido excluida del costo total. A su vez, se ha rescatado matemáticamente el saldo real de los **Aprovechamientos** (ingreso por venta de huevo comercial, gallinaza, etc.), comportándose como un crédito que disminuye el costo final.  
-    2. **Clasificación Contable:** Todos los rubros que inician con **PP** (PP Depr. Gallina, PP Mano de Obra, PP Arriendos) operan como CIF (Costos Indirectos). El resto (Alimento, Cama, Sanidad) miden la eficiencia biológica como Costos Directos.
+    1. **Cuenta Puente y Aprovechamientos:** Hemos comprobado que la cuenta `CTA PTE LIQ. ORD PCC Y MAQUILAS` inflaba el balance global en SAP. Ha sido matemáticamente excluida del costo total. En su lugar, el modelo extrae únicamente el saldo real de los **Aprovechamientos** (ingreso por venta de huevo comercial/gallinaza), registrándolo como un crédito a favor que disminuye el costo final.  
+    2. **Clasificación Contable:** Todos los rubros provenientes de SAP que inician con **PP** (PP Depr. Gallina, PP Mano de Obra, PP Arriendos) han sido encapsulados como **CIF (Costos Indirectos)**. El resto (Alimento, Cama, Sanidad) componen los **Costos Directos**, midiendo la eficiencia biológica pura de la granja.
     """)
 
     if p_base == p_actual and modo_analisis == "⚖️ Comparativo (Mes VS Mes)":
@@ -293,8 +290,8 @@ elif menu == "3. Detalle Costos por Lote (Granja ➔ Lote)":
     st.markdown('<p class="main-title">DETALLE COSTOS HUEVO POR LOTE (MICRO-AUDITORÍA)</p>', unsafe_allow_html=True)
     
     st.info("""
-    **Vincular Lotes a Granjas:**  
-    En SAP, los lotes son números abstractos, pero la columna "Nombre Granja" nos permite agruparlos lógicamente. Este tablero cruza el costo total contable de la orden (`BD CTO LINEA`) con el lote técnico de (`BD PRODUCCIÓN`), permitiendo auditar qué galpones específicos están siendo ineficientes.
+    **Vincular Lotes a Granjas (Micro-Auditoría):**  
+    En SAP, los lotes son números transaccionales sin contexto geográfico. Al enlazar la columna "Nombre Granja", el código crea una jerarquía lógica **Granja ➔ Lote**. Esto permite identificar quirúrgicamente qué galpones específicos están operando ineficientemente y afectando el promedio general de la granja.
     """)
     
     if not df_prod.empty and not df_cto.empty:
@@ -320,15 +317,18 @@ elif menu == "3. Detalle Costos por Lote (Granja ➔ Lote)":
                     "TOTAL COSTO": "${:,.0f}", "Costo Unitario ($/HF)": "${:,.2f}"
                 }).background_gradient(subset=["Costo Unitario ($/HF)"], cmap="Reds"), use_container_width=True)
             else:
-                st.warning(f"No se logró hacer cruce entre la Granja/Lote y la tabla financiera para {p_actual}.")
+                st.warning(f"No se logró hacer cruce entre la Granja/Lote técnico y la tabla financiera para {p_actual}.")
         else:
             st.warning("No hay datos técnicos de Producción para los filtros seleccionados.")
 
 elif menu == "4. Impacto y Costo Kg Alimento":
     st.markdown('<p class="main-title">COSTO KG ALIMENTO E IMPACTO DIRECTO</p>', unsafe_allow_html=True)
+    
     st.info("""
-    **Sensibilidad de Materias Primas:**  
-    El Alimento representa más del 40% del costo del huevo. Este módulo analiza dos palancas clave: el **Precio del Alimento ($/Kg)** (resultado de las negociaciones de compras de materias primas) y la **Conversión Alimenticia (Gramos/Huevo)** (eficiencia metabólica del ave en granja).
+    **Sensibilidad de Materias Primas y Conversión:**  
+    El Alimento es el Costo Directo con mayor peso. Este módulo audita dos palancas críticas:  
+    - **Precio del Alimento ($/Kg):** Refleja la eficiencia en la negociación y compra de materias primas.  
+    - **Conversión Alimenticia (Gramos/Huevo):** Es la eficiencia metabólica. Si el precio del Kg baja, pero la conversión sube (las aves comen más para producir un huevo), el margen financiero global se destruye.
     """)
     
     if not df_bd_f.empty and 'Alimento ' in df_bd_f.columns and 'KG cons Alimento' in df_bd_f.columns:
@@ -350,8 +350,8 @@ elif menu == "5. Lotes Finalizados - Levante":
     st.markdown('<p class="main-title">RESULTADOS Y COSTOS LOTES FINALIZADOS (LEVANTE)</p>', unsafe_allow_html=True)
     
     st.success("""
-    **Solución a la falta de información en SAP (Costo por Ave):**  
-    Revisamos a fondo `BASE ZCO001` y, efectivamente, no incluye inventario de gallinas, solo kilos y dinero. Para calcular el **Costo por Ave Finalizada**, el código extrae el censo de *Hembras Encasetadas* y *Aves Fin Levante* directo de tus matrices técnicas (`BD LEVANTE`) y divide el Costo Total de la orden sobre el saldo final de aves vivas que pasarán a producción.
+    **Solución Estructural: El Costo por Ave Finalizada**  
+    El sistema SAP estándar (`BASE ZCO001`) almacena valores financieros y kilos, pero omite el inventario biológico de aves vivas. Para poder entregar el **Costo por Ave**, el código extrae automáticamente las métricas de **'Hembras Encasetadas'** y **'Aves Fin Levante'** desde la matriz técnica (`BD LEVANTE`), cruzando el gasto acumulado entre las sobrevivientes reales para capitalizar el costo antes del traslado a producción.
     """)
     
     if not df_lev.empty:
@@ -377,14 +377,14 @@ elif menu == "5. Lotes Finalizados - Levante":
         else:
             st.warning("No hay lotes de Levante reportados en el período y granja seleccionados.")
     else:
-        st.error("Hoja BD LEVANTE no encontrada o vacía.")
+        st.error("Hoja técnica BD LEVANTE no encontrada.")
 
 elif menu == "6. Lotes Finalizados - Producción":
-    st.markdown('<p class="main-title">RESULTADOS TÉCNICOS DE PRODUCCIÓN</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-title">RESULTADOS TÉCNICOS DE PRODUCCIÓN FINALIZADOS</p>', unsafe_allow_html=True)
     
     st.info("""
     **Métricas Zootécnicas Complementarias:**  
-    En este módulo se cruza el costo final del galpón con variables puramente técnicas como el Porcentaje de Mortalidad. Una alta mortalidad de hembras no solo merma los Huevos Fértiles (el denominador), sino que encarece el prorrateo de la depreciación de las gallinas sobrevivientes.
+    En la etapa de producción, una alta **Mortalidad de Hembras** golpea la rentabilidad dos veces: primero, reduciendo la producción total de Huevos Fértiles (nuestro divisor universal); y segundo, concentrando la pesada carga de la Depreciación Gallina en un menor número de aves vivas. Este panel extrae el desempeño biológico final desde la `BD PRODUCCIÓN`.
     """)
     
     if not df_prod.empty:
