@@ -2,8 +2,8 @@
 Dashboard Ejecutivo — Costos Granjas Reproductoras 2026
 =======================================================
 Fuente principal: 'INFORME GENERAL MENSUAL_4.xlsx'.
-Este script procesa nativamente las hojas 'BD', 'BD CTO LINEA', 'BD LEVANTE' y 'BD PRODUCCIÓN'
-para generar todos los anexos del informe gerencial en PowerPoint.
+Integra finanzas (BD y BD CTO LINEA) y censos técnicos (BD LEVANTE y BD PRODUCCIÓN)
+para generar informes comparativos, análisis de variaciones (VIF) y costos unitarios.
 """
 
 from pathlib import Path
@@ -68,7 +68,7 @@ def load_and_process_data(file_source):
     if not df_bd.empty:
         df_bd.columns = df_bd.columns.astype(str).str.strip()
         df_bd = normalize_dates(df_bd, 'Fecha')
-        for c in ['Producción HF', 'Externos HF', 'Costo total', 'Alimento ', 'KG cons Alimento']:
+        for c in ['Producción HF', 'Externos HF', 'Costo total', 'Alimento ', 'KG cons Alimento', 'Aprovechamientos (-)']:
             if c in df_bd.columns:
                 df_bd[c] = pd.to_numeric(df_bd[c], errors='coerce').fillna(0)
 
@@ -127,22 +127,51 @@ try:
     if uploaded_file:
         df_bd, df_cto, df_raza, df_lev, df_prod = load_and_process_data(uploaded_file)
     else:
-        # Fallback to local path for seamless testing
         df_bd, df_cto, df_raza, df_lev, df_prod = load_and_process_data("INFORME GENERAL MENSUAL_4.xlsx")
 except Exception as e:
     st.error("⚠️ Por favor, carga tu archivo 'INFORME GENERAL MENSUAL_4.xlsx' en el panel lateral para iniciar el dashboard.")
     st.stop()
 
+# =============================================================================
+# 3. CONTROLES TEMPORALES (COMPARATIVO Y EVOLUTIVO)
+# =============================================================================
 st.sidebar.markdown("---")
-st.sidebar.subheader("📅 Control Temporal y Jerárquico")
+st.sidebar.subheader("📅 Control Temporal")
 
-anios_disp = sorted(df_cto["Anio"].unique().tolist(), reverse=True) if not df_cto.empty else [2026]
-anio_sel = st.sidebar.selectbox("Año", anios_disp)
+anios_disp = sorted(df_bd["Anio"].unique().tolist(), reverse=True) if not df_bd.empty else [2026]
 
-meses_disp = sorted(df_cto[df_cto["Anio"]==anio_sel]["Mes_Num"].unique().tolist()) if not df_cto.empty else [6]
-mes_sel = st.sidebar.selectbox("Mes", meses_disp, format_func=lambda x: MESES_NOMBRES.get(x, str(x)))
-periodo_actual = f"{anio_sel}-{str(mes_sel).zfill(2)}"
+def selector_periodo(titulo, key_prefix, anios_opciones, mes_reverse=False):
+    st.sidebar.markdown(f"**{titulo}:**")
+    c1, c2 = st.sidebar.columns(2)
+    anio = c1.selectbox("Año", anios_opciones, key=f"{key_prefix}_anio")
+    meses_disp = sorted(df_bd[df_bd["Anio"] == anio]["Mes_Num"].unique(), reverse=mes_reverse)
+    mes = c2.selectbox("Mes", meses_disp, format_func=lambda x: MESES_NOMBRES[x], key=f"{key_prefix}_mes")
+    return f"{anio}-{str(mes).zfill(2)}"
 
+modo_analisis = st.sidebar.radio(
+    "Seleccione el enfoque temporal:",
+    ["⚖️ Comparativo (Mes VS Mes)", "📈 Rango Histórico (Evolución)"]
+)
+
+if modo_analisis == "⚖️ Comparativo (Mes VS Mes)":
+    p_base = selector_periodo("Período Base (contra qué comparo)", "base", anios_disp)
+    p_actual = selector_periodo("Período Actual (qué estoy evaluando)", "actual", anios_disp, mes_reverse=True)
+    texto_contexto = (f"Comparativa: **{MESES_NOMBRES[int(p_actual.split('-')[1])]} {p_actual.split('-')[0]}** "
+                       f"VS **{MESES_NOMBRES[int(p_base.split('-')[1])]} {p_base.split('-')[0]}**")
+else:
+    p_base = selector_periodo("Inicio del rango", "ini", sorted(anios_disp))
+    p_actual = selector_periodo("Fin del rango", "fin", anios_disp, mes_reverse=True)
+    texto_contexto = f"Evolución Histórica: Desde **{min(p_base, p_actual)}** hasta **{max(p_base, p_actual)}**"
+
+rango_inicio, rango_fin = min(p_base, p_actual), max(p_base, p_actual)
+
+# Filtrado global de DataFrames por el rango seleccionado
+df_bd_f = df_bd[(df_bd["Periodo"] >= rango_inicio) & (df_bd["Periodo"] <= rango_fin)].sort_values("Periodo")
+df_cto_f = df_cto[(df_cto["Periodo"] >= rango_inicio) & (df_cto["Periodo"] <= rango_fin)].sort_values("Periodo")
+
+# =============================================================================
+# 4. CONTROLES JERÁRQUICOS Y MENÚ
+# =============================================================================
 st.sidebar.markdown("---")
 menu = st.sidebar.radio(
     "Seleccione el Tablero Directivo:",
@@ -156,17 +185,17 @@ menu = st.sidebar.radio(
     ]
 )
 
-# Filtro Jerárquico Granja -> Lote
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Filtros Jerárquicos Técnicos (Aplica a Pestañas 3, 5 y 6)**")
+st.sidebar.markdown("**Filtros Jerárquicos Técnicos (Pestañas 3, 5 y 6)**")
 granjas_disp = sorted(list(set(df_prod['Nombre Granja'].dropna().unique().tolist() + df_lev['Nombre Granja'].dropna().unique().tolist()))) if not df_prod.empty else []
 granja_sel = st.sidebar.multiselect("Filtro: Nombre Granja", options=granjas_disp, help="Agrupa la información respetando la jerarquía Granja ➔ Lote.")
 
 lotes_disp = []
 if granja_sel:
-    lotes_prod = df_prod[df_prod['Nombre Granja'].isin(granja_sel)]['Lote'].unique().tolist() if not df_prod.empty else []
-    lotes_lev = df_lev[df_lev['Nombre Granja'].isin(granja_sel)]['Lote'].unique().tolist() if not df_lev.empty else []
-    lotes_disp = sorted(list(set(lotes_prod + lotes_lev)))
+    # IMPORTANTE: Solución al TypeError. Convertimos a string y eliminamos nulos antes de concatenar y ordenar.
+    lotes_p = df_prod[df_prod['Nombre Granja'].isin(granja_sel)]['Lote'].dropna().astype(str).unique().tolist() if not df_prod.empty else []
+    lotes_l = df_lev[df_lev['Nombre Granja'].isin(granja_sel)]['Lote'].dropna().astype(str).unique().tolist() if not df_lev.empty else []
+    lotes_disp = sorted(list(set(lotes_p + lotes_l)))
 lote_sel = st.sidebar.multiselect("Filtro: Lote", options=lotes_disp)
 
 # =============================================================================
@@ -177,18 +206,19 @@ if menu == "1. Producción y Mix Genético":
     st.markdown('<p class="main-title">PRODUCCIÓN MES A MES POR LÍNEA 2026 (Propios + Externos)</p>', unsafe_allow_html=True)
     
     st.info("""
-    **Análisis de Producción:** Este tablero consolida el volumen total de huevos incubables, permitiendo evaluar la participación de granjas propias frente a maquilas externas, así como la distribución por raza genética (Ross, Cobb, etc.).
+    **Análisis Ejecutivo de Producción:**  
+    La cantidad de Huevos Fértiles es el *denominador universal* en la avicultura. Cualquier caída en este volumen castiga severamente la absorción de los Costos Fijos (Depreciaciones y Mano de Obra). Controlar el balance entre la producción de granjas propias y el apalancamiento a través de externos (maquilas) es clave para cumplir el presupuesto de incubación.
     """)
     
     if not df_raza.empty:
-        df_r = df_raza[df_raza["Periodo"] == periodo_actual]
+        df_r = df_raza[df_raza["Periodo"] == p_actual]
         tot_propios = df_r["PROPIOS"].sum() if "PROPIOS" in df_r.columns else 0
         tot_ext = df_r["EXTERNOS"].sum() if "EXTERNOS" in df_r.columns else 0
         
         c1, c2, c3 = st.columns(3)
         c1.metric("Volumen Granjas Propias", f"{tot_propios:,.0f} unds")
         c2.metric("Volumen Externos (Maquilas)", f"{tot_ext:,.0f} unds")
-        c3.metric("Total Huevo Fértil (Mes)", f"{(tot_propios + tot_ext):,.0f} unds")
+        c3.metric(f"Total Huevo Fértil ({p_actual})", f"{(tot_propios + tot_ext):,.0f} unds")
         
         col1, col2 = st.columns([2,1])
         with col1:
@@ -197,103 +227,114 @@ if menu == "1. Producción y Mix Genético":
             fig_trend = px.line(df_trend, x="Periodo", y=["PROPIOS", "EXTERNOS"], markers=True)
             st.plotly_chart(fig_trend, use_container_width=True)
         with col2:
-            st.subheader(f"Mix Genético ({MESES_NOMBRES.get(mes_sel)})")
+            st.subheader(f"Mix Genético ({p_actual})")
             df_pie = df_r.groupby("RAZA")[["PROPIOS", "EXTERNOS"]].sum().sum(axis=1).reset_index(name="Volumen")
             fig_pie = px.pie(df_pie, names="RAZA", values="Volumen", hole=0.4)
             st.plotly_chart(fig_pie, use_container_width=True)
     else:
-        st.warning("Datos de producción por raza no disponibles en la hoja BD PN HF RAZA.")
+        st.warning("Datos de producción por raza no disponibles.")
 
 elif menu == "2. Costo Huevo Fértil (Consolidado)":
-    st.markdown('<p class="main-title">COSTO HUEVO FÉRTIL 2026</p>', unsafe_allow_html=True)
-    
+    st.markdown('<p class="main-title">ANÁLISIS FINANCIERO: COSTO HUEVO FÉRTIL Y DESVIACIONES</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="subtitle">{texto_contexto}</p>', unsafe_allow_html=True)
+
     st.info("""
-    **Análisis de Costo Unitario y Clasificación Contable:**  
-    En concordancia con las mejores prácticas contables, los costos han sido categorizados visualmente en **Directos** (Alimento, Cama, Droga, Aseo, Materia Prima) y **CIF** (rubros como PP Depr. Gallina, Mano de Obra, Arriendo).  
-    *Cuenta Puente:* El ruido de la cuenta `CTA PTE LIQ. ORD PCC Y MAQUILAS` está excluido del costo bruto, extrayendo matemáticamente de allí los **Aprovechamientos (SUBPRODUCTOS)** para obtener un costo neto 100% puro y libre de duplicidades.
+    **Análisis Directos vs CIF y Tratamiento de la 'Cuenta Puente':**  
+    1. **Cuenta Puente y Aprovechamientos:** Detectamos que la cuenta `CTA PTE LIQ. ORD PCC Y MAQUILAS` duplicaba las órdenes en SAP. Ya ha sido excluida del costo total. A su vez, se ha rescatado matemáticamente el saldo real de los **Aprovechamientos** (ingreso por venta de huevo comercial, gallinaza, etc.), comportándose como un crédito que disminuye el costo final.  
+    2. **Clasificación Contable:** Todos los rubros que inician con **PP** (PP Depr. Gallina, PP Mano de Obra, PP Arriendos) operan como CIF (Costos Indirectos). El resto (Alimento, Cama, Sanidad) miden la eficiencia biológica como Costos Directos.
     """)
 
-    if not df_cto.empty:
-        df_mes = df_cto[df_cto["Periodo"] == periodo_actual]
-        hf_tot = df_mes["Huevos fértiles"].sum()
-        
-        costo_dir = df_mes["Costos Directos"].sum()
-        costo_cif = df_mes["Costos CIF"].sum()
-        aprov = df_mes["SUBPRODUCTOS"].sum() # Aprovechamientos
-        
-        costo_neto = costo_dir + costo_cif + aprov
-        cu = safe_div(costo_neto, hf_tot)
-        
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Costo Neto Consolidado", f"${costo_neto:,.0f}")
-        c2.metric("Huevos Fértiles (Línea)", f"{hf_tot:,.0f}")
-        c3.metric("Aprovechamientos (Crédito Real)", f"${aprov:,.0f}")
-        c4.metric("Costo Unitario ($/HF)", f"${cu:,.2f}")
-        
-        col_chart1, col_chart2 = st.columns(2)
-        with col_chart1:
-            st.subheader("Clasificación Contable")
-            fig_pie = px.pie(names=["Costos Directos", "CIF (Indirectos / PP)"], values=[costo_dir, costo_cif], hole=0.4)
-            st.plotly_chart(fig_pie, use_container_width=True)
-            
-        with col_chart2:
-            st.subheader("Estructura Top Rubros")
-            cols_rubros = ['ALIMENTO', 'DEPRECIACIÓN GALLINA', 'MANO DE OBRA', 'INDIRECTOS', 'DEPRECIACIÓN CONST Y EDIF', 'ELEMENTOS DE ASEO Y DESINFECCION', 'CAMA', 'DROGA']
-            vals = [df_mes[c].sum() for c in cols_rubros if c in df_mes.columns]
-            df_rubros = pd.DataFrame({"Rubro": [c for c in cols_rubros if c in df_mes.columns], "Valor": vals}).sort_values("Valor", ascending=False)
-            fig_bar = px.bar(df_rubros, x="Valor", y="Rubro", orientation='h', text_auto=".2s")
-            st.plotly_chart(fig_bar, use_container_width=True)
+    if p_base == p_actual and modo_analisis == "⚖️ Comparativo (Mes VS Mes)":
+        st.warning("⚠️ Para el análisis de variaciones, selecciona un 'Período Base' diferente al 'Período Actual'.")
+        st.stop()
+
+    fila_b = df_bd[df_bd["Periodo"] == p_base]
+    fila_a = df_bd[df_bd["Periodo"] == p_actual]
+    
+    if fila_b.empty or fila_a.empty:
+        st.error("No hay datos consolidados suficientes en los períodos seleccionados para comparar.")
+        st.stop()
+
+    df_b, df_a = fila_b.iloc[0], fila_a.iloc[0]
+    cu_b = safe_div(df_b['Costo total'], df_b['Producción HF'])
+    cu_a = safe_div(df_a['Costo total'], df_a['Producción HF'])
+    var_tot = cu_a - cu_b
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric(f"Costo Unitario {p_base} (Base)", f"${cu_b:,.2f}")
+    c2.metric(f"Costo Unitario {p_actual} (Actual)", f"${cu_a:,.2f}")
+    delta_pct = (var_tot / cu_b) * 100 if pd.notna(cu_b) and cu_b != 0 else 0
+    c3.metric("Desviación Total ($/HF)", f"${var_tot:+,.2f}", delta=f"{delta_pct:+.1f}%", delta_color="inverse")
+
+    # Análisis de Variación por Rubro (VIF)
+    rubros_vif = [c for c in ['Arriendo ', 'Cama - Cascarilla', 'Depreciacion Const. Y Edif.', 'Depreciacion Huevo ', 'Droga', 'Materia prima (calcio)', 'Alimento ', 'Mano de Obra', 'Aseo y desinfección', 'Indirectos'] if c in df_bd.columns]
+    
+    filas = []
+    for r in rubros_vif:
+        ub = safe_div(df_b[r], df_b['Producción HF'])
+        ua = safe_div(df_a[r], df_a['Producción HF'])
+        filas.append({"Rubro": r.strip(), "Impacto ($/HF)": (ua - ub) if pd.notna(ua) and pd.notna(ub) else np.nan})
+    
+    df_vif = pd.DataFrame(filas).dropna().sort_values("Impacto ($/HF)", ascending=False)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Evolución del Costo Unitario")
+        df_bd_f["Costo Unitario"] = df_bd_f["Costo total"] / df_bd_f["Producción HF"]
+        fig_line = px.line(df_bd_f, x="Periodo", y="Costo Unitario", markers=True)
+        st.plotly_chart(fig_line, use_container_width=True)
+    with col2:
+        st.subheader("Tornado de Variación (VIF) por Rubro")
+        if not df_vif.empty:
+            fig_tor = px.bar(df_vif.sort_values("Impacto ($/HF)"), y="Rubro", x="Impacto ($/HF)", orientation="h", color="Impacto ($/HF)", color_continuous_scale="RdYlGn_r")
+            st.plotly_chart(fig_tor, use_container_width=True)
 
 elif menu == "3. Detalle Costos por Lote (Granja ➔ Lote)":
-    st.markdown('<p class="main-title">DETALLE COSTOS HUEVO POR LOTE - JUNIO 2026</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-title">DETALLE COSTOS HUEVO POR LOTE (MICRO-AUDITORÍA)</p>', unsafe_allow_html=True)
     
     st.info("""
-    **Análisis Jerárquico de Lotes:**  
-    Dado que un usuario nuevo no conoce los lotes de memoria, este reporte agrupa automáticamente bajo la estructura **Granja ➔ Lote**. Permite auditar qué lotes específicos están inflando el promedio de la granja (causa raíz frecuente: caídas en curva de postura que disparan la Depreciación Gallina por huevo).
+    **Vincular Lotes a Granjas:**  
+    En SAP, los lotes son números abstractos, pero la columna "Nombre Granja" nos permite agruparlos lógicamente. Este tablero cruza el costo total contable de la orden (`BD CTO LINEA`) con el lote técnico de (`BD PRODUCCIÓN`), permitiendo auditar qué galpones específicos están siendo ineficientes.
     """)
     
     if not df_prod.empty and not df_cto.empty:
-        df_p = df_prod[df_prod["Periodo"] == periodo_actual].copy()
+        df_p = df_prod[df_prod["Periodo"] == p_actual].copy()
         
         if granja_sel: df_p = df_p[df_p["Nombre Granja"].isin(granja_sel)]
-        if lote_sel: df_p = df_p[df_p["Lote"].isin(lote_sel)]
+        if lote_sel: df_p = df_p[df_p["Lote"].astype(str).isin(lote_sel)]
         
         if not df_p.empty:
             df_p["Lote"] = df_p["Lote"].astype(str)
-            df_c = df_cto[df_cto["Periodo"] == periodo_actual].copy()
+            df_c = df_cto[df_cto["Periodo"] == p_actual].copy()
             df_c["lote"] = df_c["lote"].astype(str)
             
-            # Cruzar datos técnicos con financieros
             df_merge = pd.merge(df_p, df_c, left_on="Lote", right_on="lote", how="inner")
             
             if not df_merge.empty:
                 df_merge["Costo Unitario ($/HF)"] = safe_div(df_merge["TOTAL COSTO"], df_merge["Huevos fértiles"])
-                cols_visuales = ['Nombre Granja', 'Lote', 'Total Aves Encasetadas', 'Huevos fértiles', 'TOTAL COSTO', 'Costo Unitario ($/HF)']
+                cols_visuales = ['Nombre Granja', 'Lote', 'Total Aves Encasetadas', 'Huevos fértiles', 'Costos Directos', 'Costos CIF', 'SUBPRODUCTOS', 'TOTAL COSTO', 'Costo Unitario ($/HF)']
                 
                 st.dataframe(df_merge[cols_visuales].sort_values("Costo Unitario ($/HF)", ascending=False).style.format({
-                    "Total Aves Encasetadas": "{:,.0f}",
-                    "Huevos fértiles": "{:,.0f}",
-                    "TOTAL COSTO": "${:,.0f}",
-                    "Costo Unitario ($/HF)": "${:,.2f}"
+                    "Total Aves Encasetadas": "{:,.0f}", "Huevos fértiles": "{:,.0f}",
+                    "Costos Directos": "${:,.0f}", "Costos CIF": "${:,.0f}", "SUBPRODUCTOS": "${:,.0f}",
+                    "TOTAL COSTO": "${:,.0f}", "Costo Unitario ($/HF)": "${:,.2f}"
                 }).background_gradient(subset=["Costo Unitario ($/HF)"], cmap="Reds"), use_container_width=True)
             else:
-                st.warning("No se logró hacer cruce entre la Granja/Lote y la tabla financiera de costos para este período.")
+                st.warning(f"No se logró hacer cruce entre la Granja/Lote y la tabla financiera para {p_actual}.")
         else:
-            st.warning("No hay datos técnicos de Producción para la granja seleccionada.")
-    else:
-        st.warning("No se dispone de las bases BD PRODUCCIÓN o BD CTO LINEA.")
+            st.warning("No hay datos técnicos de Producción para los filtros seleccionados.")
 
 elif menu == "4. Impacto y Costo Kg Alimento":
     st.markdown('<p class="main-title">COSTO KG ALIMENTO E IMPACTO DIRECTO</p>', unsafe_allow_html=True)
     st.info("""
     **Sensibilidad de Materias Primas:**  
-    El rubro ALIMENTO está clasificado como el mayor Costo Directo de la operación. Esta pestaña audita la relación entre la inversión ($) y los kilogramos consumidos, evaluando la conversión alimenticia y el precio por Kg, factores vitales para anticipar desviaciones presupuestales.
+    El Alimento representa más del 40% del costo del huevo. Este módulo analiza dos palancas clave: el **Precio del Alimento ($/Kg)** (resultado de las negociaciones de compras de materias primas) y la **Conversión Alimenticia (Gramos/Huevo)** (eficiencia metabólica del ave en granja).
     """)
     
-    if not df_cto.empty:
-        df_alim = df_cto.groupby("Periodo").agg(Costo_Alimento=("ALIMENTO", "sum"), Kg_Consumidos=("consumo alimento kg", "sum"), Huevos=("Huevos fértiles", "sum")).reset_index()
-        df_alim["Precio por Kg ($)"] = safe_div(df_alim["Costo_Alimento"], df_alim["Kg_Consumidos"])
-        df_alim["Gramos Alimento / Huevo"] = safe_div(df_alim["Kg_Consumidos"] * 1000, df_alim["Huevos"])
+    if not df_bd_f.empty and 'Alimento ' in df_bd_f.columns and 'KG cons Alimento' in df_bd_f.columns:
+        df_alim = df_bd_f.copy()
+        df_alim["Precio por Kg ($)"] = safe_div(df_alim["Alimento "], df_alim["KG cons Alimento"])
+        df_alim["Gramos Alimento / Huevo"] = safe_div(df_alim["KG cons Alimento"] * 1000, df_alim["Producción HF"])
         
         col1, col2 = st.columns(2)
         with col1:
@@ -308,20 +349,18 @@ elif menu == "4. Impacto y Costo Kg Alimento":
 elif menu == "5. Lotes Finalizados - Levante":
     st.markdown('<p class="main-title">RESULTADOS Y COSTOS LOTES FINALIZADOS (LEVANTE)</p>', unsafe_allow_html=True)
     
-    st.info("""
-    **Análisis Técnico - Costo por Ave Valla (Censo Técnico):**  
-    Como identificamos, la información contable pura (ZCO001) carece del censo de aves vivas. Para resolver esto y obtener el Costo por Ave, hemos integrado la matriz técnica `BD LEVANTE`. De aquí extraemos métricas críticas como "Hembras Encasetadas" y el inventario de finalización para generar los unitarios reales.
+    st.success("""
+    **Solución a la falta de información en SAP (Costo por Ave):**  
+    Revisamos a fondo `BASE ZCO001` y, efectivamente, no incluye inventario de gallinas, solo kilos y dinero. Para calcular el **Costo por Ave Finalizada**, el código extrae el censo de *Hembras Encasetadas* y *Aves Fin Levante* directo de tus matrices técnicas (`BD LEVANTE`) y divide el Costo Total de la orden sobre el saldo final de aves vivas que pasarán a producción.
     """)
     
     if not df_lev.empty:
-        df_l = df_lev[df_lev["Periodo"] == periodo_actual].copy()
+        df_l = df_lev[df_lev["Periodo"] == p_actual].copy()
         if granja_sel: df_l = df_l[df_l["Nombre Granja"].isin(granja_sel)]
-        if lote_sel: df_l = df_l[df_l["Lote"].isin(lote_sel)]
+        if lote_sel: df_l = df_l[df_l["Lote"].astype(str).isin(lote_sel)]
         
         if not df_l.empty:
             cols_mostrar = ['Nombre Granja', 'Lote', 'Hembras Encasetadas', 'Total Aves Encasetadas']
-            
-            # Agregar columnas técnicas si existen
             if 'Total Aves Fin Levante' in df_l.columns: cols_mostrar.append('Total Aves Fin Levante')
             if 'Costo Total Levante' in df_l.columns: 
                 cols_mostrar.append('Costo Total Levante')
@@ -341,17 +380,17 @@ elif menu == "5. Lotes Finalizados - Levante":
         st.error("Hoja BD LEVANTE no encontrada o vacía.")
 
 elif menu == "6. Lotes Finalizados - Producción":
-    st.markdown('<p class="main-title">RESULTADOS TÉCNICOS Y COSTO HF POR LOTE (PRODUCCIÓN)</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-title">RESULTADOS TÉCNICOS DE PRODUCCIÓN</p>', unsafe_allow_html=True)
     
     st.info("""
-    **Métricas Zootécnicas de Producción Finalizada:**  
-    Este módulo utiliza `BD PRODUCCIÓN` para suplir la falta de datos de censo en el reporte SAP estándar. Permite evaluar el Costo Total del Lote cruzado directamente con el comportamiento biológico de la parvada (Mortalidad, aves fin producción y edad de sacrificio).
+    **Métricas Zootécnicas Complementarias:**  
+    En este módulo se cruza el costo final del galpón con variables puramente técnicas como el Porcentaje de Mortalidad. Una alta mortalidad de hembras no solo merma los Huevos Fértiles (el denominador), sino que encarece el prorrateo de la depreciación de las gallinas sobrevivientes.
     """)
     
     if not df_prod.empty:
-        df_p = df_prod[df_prod["Periodo"] == periodo_actual].copy()
+        df_p = df_prod[df_prod["Periodo"] == p_actual].copy()
         if granja_sel: df_p = df_p[df_p["Nombre Granja"].isin(granja_sel)]
-        if lote_sel: df_p = df_p[df_p["Lote"].isin(lote_sel)]
+        if lote_sel: df_p = df_p[df_p["Lote"].astype(str).isin(lote_sel)]
         
         if not df_p.empty:
             cols_mostrar = ['Nombre Granja', 'Lote', 'Hembras Encasetadas', 'Mortalidad Hembra', '%Mortalidad Hembra']
@@ -366,5 +405,3 @@ elif menu == "6. Lotes Finalizados - Producción":
             }), use_container_width=True)
         else:
             st.warning("No hay datos técnicos de producción disponibles para los filtros aplicados.")
-    else:
-        st.error("Hoja BD PRODUCCIÓN no encontrada o vacía.")
