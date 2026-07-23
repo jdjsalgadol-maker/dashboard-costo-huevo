@@ -123,7 +123,6 @@ st.sidebar.markdown("**Reporte: ANALISIS COSTOS GRANJAS REPRODUCTORAS 2026**")
 uploaded_file = st.sidebar.file_uploader("Subir Archivo Consolidado", type=["xlsx", "xls"])
 
 try:
-    # Se asegura el nombre verbatim requerido
     file_source = uploaded_file if uploaded_file else "INFORME GENERAL MENSUAL_5.xlsx"
     df_bd, df_cto, df_raza, df_lev, df_prod = load_and_process_data(file_source)
 except Exception as e:
@@ -184,15 +183,35 @@ menu = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Filtros Jerárquicos Técnicos (Pestañas 3, 5 y 6)**")
-granjas_disp = sorted(list(set(df_prod['Nombre Granja'].dropna().unique().tolist() + df_lev['Nombre Granja'].dropna().unique().tolist()))) if not df_prod.empty else []
+
+# Corrección de la lista de Granjas Disponibles
+granjas_disp = []
+if not df_prod.empty and 'Nombre Granja' in df_prod.columns:
+    granjas_disp += df_prod['Nombre Granja'].dropna().astype(str).unique().tolist()
+if not df_lev.empty and 'Nombre Granja' in df_lev.columns:
+    granjas_disp += df_lev['Nombre Granja'].dropna().astype(str).unique().tolist()
+granjas_disp = sorted(list(set(granjas_disp)))
+
 granja_sel = st.sidebar.multiselect("Filtro: Nombre Granja", options=granjas_disp, help="Agrupa la información respetando la jerarquía.")
 
-lotes_disp = []
+# Corrección de la lógica de los lotes: si no hay granja seleccionada, mostrar TODOS los lotes
+lotes_p = []
+lotes_l = []
+
 if granja_sel:
-    # IMPORTANTE: Se solucionó el TypeError forzando la conversión a string .astype(str) antes del set()
-    lotes_p = df_prod[df_prod['Nombre Granja'].isin(granja_sel)]['Lote'].dropna().astype(str).unique().tolist() if not df_prod.empty else []
-    lotes_l = df_lev[df_lev['Nombre Granja'].isin(granja_sel)]['Lote'].dropna().astype(str).unique().tolist() if not df_lev.empty else []
-    lotes_disp = sorted(list(set(lotes_p + lotes_l)))
+    # Mostrar lotes solo de la(s) granja(s) seleccionada(s)
+    if not df_prod.empty and 'Lote' in df_prod.columns and 'Nombre Granja' in df_prod.columns:
+        lotes_p = df_prod[df_prod['Nombre Granja'].isin(granja_sel)]['Lote'].dropna().astype(str).unique().tolist()
+    if not df_lev.empty and 'Lote' in df_lev.columns and 'Nombre Granja' in df_lev.columns:
+        lotes_l = df_lev[df_lev['Nombre Granja'].isin(granja_sel)]['Lote'].dropna().astype(str).unique().tolist()
+else:
+    # Si no hay granja seleccionada, mostrar TODOS los lotes
+    if not df_prod.empty and 'Lote' in df_prod.columns:
+        lotes_p = df_prod['Lote'].dropna().astype(str).unique().tolist()
+    if not df_lev.empty and 'Lote' in df_lev.columns:
+        lotes_l = df_lev['Lote'].dropna().astype(str).unique().tolist()
+
+lotes_disp = sorted(list(set(lotes_p + lotes_l)))
 lote_sel = st.sidebar.multiselect("Filtro: Lote", options=lotes_disp)
 
 # =============================================================================
