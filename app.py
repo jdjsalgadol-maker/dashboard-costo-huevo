@@ -4,7 +4,7 @@ Dashboard Ejecutivo — Análisis de Costos Granjas Reproductoras 2026
 Fuente principal: 'INFORME GENERAL MENSUAL_5.xlsx'.
 Integra finanzas (BD y BD CTO LINEA) y censos técnicos (BD LEVANTE y BD PRODUCCIÓN)
 para generar informes comparativos, análisis de variaciones, costos unitarios
-y matrices de resumen agrupadas por jerarquía Granja ➔ Lote.
+y matrices de resumen agrupadas automáticamente.
 """
 
 from pathlib import Path
@@ -49,7 +49,7 @@ def safe_div(numer, denom):
     return numer / denom
 
 # =============================================================================
-# 1. MOTOR DE DATOS (ETL) Y MAPEO GRANJA-LOTE
+# 1. MOTOR DE DATOS (ETL) NATIVO Y MAPEO GRANJA-LOTE
 # =============================================================================
 @st.cache_data(show_spinner="Integrando bases operativas y contables (SAP)...")
 def load_and_process_data(file_source):
@@ -79,7 +79,7 @@ def load_and_process_data(file_source):
     df_lev = clean_technical_sheet("BD LEVANTE")
     df_prod = clean_technical_sheet("BD PRODUCCIÓN")
 
-    # Crear Diccionario Maestro: Lote -> Nombre Granja
+    # Mapeo Lote -> Granja
     map_lote_granja = {}
     if not df_prod.empty and 'Lote' in df_prod.columns and 'Nombre Granja' in df_prod.columns:
         df_p_clean = df_prod.dropna(subset=['Lote', 'Nombre Granja'])
@@ -88,7 +88,7 @@ def load_and_process_data(file_source):
         df_l_clean = df_lev.dropna(subset=['Lote', 'Nombre Granja'])
         map_lote_granja.update(dict(zip(df_l_clean['Lote'].astype(str).str.strip().str.upper(), df_l_clean['Nombre Granja'])))
 
-    # Base Macro Financiera (BD)
+    # 1. Base Macro Financiera (BD)
     df_bd = pd.read_excel(xls, sheet_name="BD") if "BD" in xls.sheet_names else pd.DataFrame()
     if not df_bd.empty:
         df_bd.columns = df_bd.columns.astype(str).str.strip()
@@ -97,7 +97,7 @@ def load_and_process_data(file_source):
             if c in df_bd.columns:
                 df_bd[c] = pd.to_numeric(df_bd[c], errors='coerce').fillna(0)
 
-    # Base Detalle por Lote/Línea (BD CTO LINEA)
+    # 2. Base Detalle por Lote/Línea (BD CTO LINEA)
     df_cto = pd.read_excel(xls, sheet_name="BD CTO LINEA") if "BD CTO LINEA" in xls.sheet_names else pd.DataFrame()
     if not df_cto.empty:
         df_cto.columns = df_cto.columns.astype(str).str.strip()
@@ -109,19 +109,17 @@ def load_and_process_data(file_source):
             if c in df_cto.columns:
                 df_cto[c] = pd.to_numeric(df_cto[c], errors='coerce').fillna(0)
         
-        # Mapeo de Lote a Granja
         if 'lote' in df_cto.columns:
             df_cto['Nombre Granja'] = df_cto['lote'].astype(str).str.strip().str.upper().map(map_lote_granja).fillna('Sin Granja Asignada')
         else:
             df_cto['Nombre Granja'] = 'Sin Granja Asignada'
         
-        # Agrupación CIF vs Directos
         dir_cols = ['ALIMENTO', 'CAMA', 'DROGA', 'MATERIA PRIMA', 'ELEMENTOS DE ASEO Y DESINFECCION']
         cif_cols = ['DEPRECIACIÓN CONST Y EDIF', 'INDIRECTOS', 'DEPRECIACIÓN GALLINA', 'MANO DE OBRA', 'ARRIENDO']
         df_cto['Costos Directos'] = df_cto[[c for c in dir_cols if c in df_cto.columns]].sum(axis=1)
         df_cto['Costos CIF'] = df_cto[[c for c in cif_cols if c in df_cto.columns]].sum(axis=1)
 
-    # Producción por Raza (BD PN HF RAZA)
+    # 3. Producción por Raza (BD PN HF RAZA)
     df_raza = pd.read_excel(xls, sheet_name="BD PN HF RAZA") if "BD PN HF RAZA" in xls.sheet_names else pd.DataFrame()
     if not df_raza.empty:
         df_raza.columns = df_raza.columns.astype(str).str.strip()
@@ -181,7 +179,7 @@ df_bd_f = df_bd[(df_bd["Periodo"] >= rango_inicio) & (df_bd["Periodo"] <= rango_
 df_cto_f = df_cto[(df_cto["Periodo"] >= rango_inicio) & (df_cto["Periodo"] <= rango_fin)].sort_values("Periodo")
 
 # =============================================================================
-# 4. CONTROLES JERÁRQUICOS Y MENÚ
+# 4. MENÚ DE TABLEROS DIRECTIVOS
 # =============================================================================
 st.sidebar.markdown("---")
 menu = st.sidebar.radio(
@@ -196,37 +194,8 @@ menu = st.sidebar.radio(
     ]
 )
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("**Filtros Jerárquicos Técnicos**")
-
-granjas_disp = []
-if not df_prod.empty and 'Nombre Granja' in df_prod.columns:
-    granjas_disp += df_prod['Nombre Granja'].dropna().astype(str).unique().tolist()
-if not df_lev.empty and 'Nombre Granja' in df_lev.columns:
-    granjas_disp += df_lev['Nombre Granja'].dropna().astype(str).unique().tolist()
-granjas_disp = sorted(list(set(granjas_disp)))
-
-granja_sel = st.sidebar.multiselect("Filtro: Nombre Granja", options=granjas_disp, help="Agrupa la información respetando la jerarquía.")
-
-lotes_p = []
-lotes_l = []
-
-if granja_sel:
-    if not df_prod.empty and 'Lote' in df_prod.columns and 'Nombre Granja' in df_prod.columns:
-        lotes_p = df_prod[df_prod['Nombre Granja'].isin(granja_sel)]['Lote'].dropna().astype(str).unique().tolist()
-    if not df_lev.empty and 'Lote' in df_lev.columns and 'Nombre Granja' in df_lev.columns:
-        lotes_l = df_lev[df_lev['Nombre Granja'].isin(granja_sel)]['Lote'].dropna().astype(str).unique().tolist()
-else:
-    if not df_prod.empty and 'Lote' in df_prod.columns:
-        lotes_p = df_prod['Lote'].dropna().astype(str).unique().tolist()
-    if not df_lev.empty and 'Lote' in df_lev.columns:
-        lotes_l = df_lev['Lote'].dropna().astype(str).unique().tolist()
-
-lotes_disp = sorted(list(set(lotes_p + lotes_l)))
-lote_sel = st.sidebar.multiselect("Filtro: Lote", options=lotes_disp)
-
 # =============================================================================
-# MÓDULOS DEL DASHBOARD Y MATRICES ADICIONALES
+# MÓDULOS DEL DASHBOARD Y MATRICES AUTOMÁTICAS
 # =============================================================================
 
 if menu == "1. Producción y Mix Genético":
@@ -336,61 +305,58 @@ elif menu == "3. Detalle Costos por Lote (Granja ➔ Lote)":
     st.markdown('<p class="main-title">DETALLE COSTOS HUEVO POR LOTE (MICRO-AUDITORÍA)</p>', unsafe_allow_html=True)
     
     st.info("""
-    **Vincular Lotes a Granjas (Micro-Auditoría):**  
-    El enlace de "Nombre Granja" permite identificar quirúrgicamente qué galpones específicos están operando ineficientemente y afectando el promedio general.
+    **Matriz Automática Granja ➔ Lote:**  
+    A continuación se cruza automáticamente toda la base operativa de `BD PRODUCCIÓN` con los costos financieros de `BD CTO LINEA` para el período seleccionado. Primero se muestra la auditoría consolidada por granja, y debajo el desglose lote a lote.
     """)
     
     if not df_prod.empty and not df_cto.empty:
         df_p = df_prod[df_prod["Periodo"] == p_actual].copy()
+        df_p["Lote"] = df_p["Lote"].astype(str)
         
-        if granja_sel: df_p = df_p[df_p["Nombre Granja"].isin(granja_sel)]
-        if lote_sel: df_p = df_p[df_p["Lote"].astype(str).isin(lote_sel)]
+        df_c = df_cto[df_cto["Periodo"] == p_actual].copy()
+        df_c["lote"] = df_c["lote"].astype(str)
         
-        if not df_p.empty:
-            df_p["Lote"] = df_p["Lote"].astype(str)
-            df_c = df_cto[df_cto["Periodo"] == p_actual].copy()
-            df_c["lote"] = df_c["lote"].astype(str)
+        df_merge = pd.merge(df_p, df_c, left_on="Lote", right_on="lote", how="inner")
+        
+        if not df_merge.empty:
+            df_merge["Costo Unitario ($/HF)"] = safe_div(df_merge["TOTAL COSTO"], df_merge["Huevos fértiles"])
+            cols_visuales = ['Nombre Granja_x', 'Lote', 'Total Aves Encasetadas', 'Huevos fértiles', 'Costos Directos', 'Costos CIF', 'SUBPRODUCTOS', 'TOTAL COSTO', 'Costo Unitario ($/HF)']
             
-            df_merge = pd.merge(df_p, df_c, left_on="Lote", right_on="lote", how="inner")
+            # --- Matriz Resumen de Granjas ---
+            st.markdown("### 🏢 Resumen de Micro-Auditoría por Granja")
+            matriz_auditoria = df_merge.groupby("Nombre Granja_x").agg(
+                Lotes_Involucrados=("Lote", lambda x: ", ".join(x.unique())),
+                Aves_Totales=("Total Aves Encasetadas", "sum"),
+                Huevos_Totales=("Huevos fértiles", "sum"),
+                Costo_Total=("TOTAL COSTO", "sum")
+            ).reset_index().rename(columns={"Nombre Granja_x": "Granja"})
             
-            if not df_merge.empty:
-                df_merge["Costo Unitario ($/HF)"] = safe_div(df_merge["TOTAL COSTO"], df_merge["Huevos fértiles"])
-                cols_visuales = ['Nombre Granja_x', 'Lote', 'Total Aves Encasetadas', 'Huevos fértiles', 'Costos Directos', 'Costos CIF', 'SUBPRODUCTOS', 'TOTAL COSTO', 'Costo Unitario ($/HF)']
-                
-                # --- Matriz Resumen de Granjas ---
-                st.markdown("### 🏢 Resumen de Micro-Auditoría por Granja")
-                matriz_auditoria = df_merge.groupby("Nombre Granja_x").agg(
-                    Lotes_Involucrados=("Lote", lambda x: ", ".join(x.unique())),
-                    Aves_Totales=("Total Aves Encasetadas", "sum"),
-                    Huevos_Totales=("Huevos fértiles", "sum"),
-                    Costo_Total=("TOTAL COSTO", "sum")
-                ).reset_index().rename(columns={"Nombre Granja_x": "Granja"})
-                matriz_auditoria["Costo Unitario Global ($/HF)"] = safe_div(matriz_auditoria["Costo_Total"], matriz_auditoria["Huevos_Totales"])
-                st.dataframe(matriz_auditoria.style.format({
-                    "Aves_Totales": "{:,.0f}", "Huevos_Totales": "{:,.0f}",
-                    "Costo_Total": "${:,.0f}", "Costo Unitario Global ($/HF)": "${:,.2f}"
-                }), use_container_width=True)
+            matriz_auditoria["Costo Unitario Global ($/HF)"] = safe_div(matriz_auditoria["Costo_Total"], matriz_auditoria["Huevos_Totales"])
+            st.dataframe(matriz_auditoria.style.format({
+                "Aves_Totales": "{:,.0f}", "Huevos_Totales": "{:,.0f}",
+                "Costo_Total": "${:,.0f}", "Costo Unitario Global ($/HF)": "${:,.2f}"
+            }), use_container_width=True)
 
-                st.markdown("---")
-                st.markdown("**Desglose Exacto Lote a Lote**")
-                df_merge = df_merge.rename(columns={"Nombre Granja_x": "Granja"})
-                cols_visuales[0] = "Granja"
-                st.dataframe(df_merge[cols_visuales].sort_values("Costo Unitario ($/HF)", ascending=False).style.format({
-                    "Total Aves Encasetadas": "{:,.0f}", "Huevos fértiles": "{:,.0f}",
-                    "Costos Directos": "${:,.0f}", "Costos CIF": "${:,.0f}", "SUBPRODUCTOS": "${:,.0f}",
-                    "TOTAL COSTO": "${:,.0f}", "Costo Unitario ($/HF)": "${:,.2f}"
-                }).background_gradient(subset=["Costo Unitario ($/HF)"], cmap="Reds"), use_container_width=True)
-            else:
-                st.warning(f"No se logró hacer cruce entre la Granja/Lote técnico y la tabla financiera para {p_actual}.")
+            st.markdown("---")
+            st.markdown("### 📊 Desglose Exacto Lote a Lote")
+            df_merge = df_merge.rename(columns={"Nombre Granja_x": "Granja"})
+            cols_visuales[0] = "Granja"
+            st.dataframe(df_merge[cols_visuales].sort_values("Costo Unitario ($/HF)", ascending=False).style.format({
+                "Total Aves Encasetadas": "{:,.0f}", "Huevos fértiles": "{:,.0f}",
+                "Costos Directos": "${:,.0f}", "Costos CIF": "${:,.0f}", "SUBPRODUCTOS": "${:,.0f}",
+                "TOTAL COSTO": "${:,.0f}", "Costo Unitario ($/HF)": "${:,.2f}"
+            }).background_gradient(subset=["Costo Unitario ($/HF)"], cmap="Reds"), use_container_width=True)
         else:
-            st.warning("No hay datos técnicos de Producción para los filtros seleccionados.")
+            st.warning(f"No se logró hacer cruce entre la Granja/Lote técnico y la tabla financiera para {p_actual}.")
+    else:
+        st.warning("No hay datos técnicos de Producción y Costos disponibles.")
 
 elif menu == "4. Impacto y Costo Kg Alimento":
     st.markdown('<p class="main-title">COSTO KG ALIMENTO E IMPACTO DIRECTO</p>', unsafe_allow_html=True)
     
     st.info("""
     **Sensibilidad de Materias Primas y Conversión:**  
-    El Alimento es el Costo Directo con mayor peso. Auditar el Precio del Alimento ($/Kg) y la Conversión Alimenticia (Gramos/Huevo) es vital para anticipar fugas financieras.
+    Auditoría automática de **Precio del Alimento ($/Kg)** y **Conversión Alimenticia (Gramos/Huevo)** sin requerir filtros manuales.
     """)
     
     if not df_bd_f.empty and 'Alimento ' in df_bd_f.columns and 'KG cons Alimento' in df_bd_f.columns:
@@ -431,13 +397,11 @@ elif menu == "5. Lotes Finalizados - Levante":
     
     st.success("""
     **El Costo Verdadero por Ave Finalizada:**  
-    Debido a que el SAP estándar almacena solo valores financieros y kilos, el sistema aquí lee directamente tu base técnica (`BD LEVANTE`), cruzando los costos operativos de la fase contra las *Aves Finalizadas Reales* de cada galpón. Esto determina el verdadero costo de capitalización.
+    El sistema extrae automáticamente las métricas de **'Hembras Encasetadas'** y **'Aves Fin Levante'** para todas las granjas operativas en el mes, consolidando la información de manera global y granular.
     """)
     
     if not df_lev.empty:
         df_l = df_lev[df_lev["Periodo"] == p_actual].copy()
-        if granja_sel: df_l = df_l[df_l["Nombre Granja"].isin(granja_sel)]
-        if lote_sel: df_l = df_l[df_l["Lote"].astype(str).isin(lote_sel)]
         
         if not df_l.empty:
             # --- Matriz Resumen de Granjas ---
@@ -455,7 +419,7 @@ elif menu == "5. Lotes Finalizados - Levante":
             }), use_container_width=True)
 
             st.markdown("---")
-            st.markdown("**Desglose Exacto por Lote de Levante**")
+            st.markdown("### 📊 Desglose Exacto por Lote de Levante")
             cols_mostrar = ['Nombre Granja', 'Lote', 'Hembras Encasetadas', 'Total Aves Encasetadas']
             if 'Total Aves Fin Levante' in df_l.columns: cols_mostrar.append('Total Aves Fin Levante')
             if 'Costo Total Levante' in df_l.columns: 
@@ -471,7 +435,7 @@ elif menu == "5. Lotes Finalizados - Levante":
                 "Costo por Ave Finalizada": "${:,.2f}"
             }), use_container_width=True)
         else:
-            st.warning("No hay lotes de Levante reportados en el período y filtros seleccionados.")
+            st.warning("No hay lotes de Levante reportados en el período seleccionado.")
     else:
         st.error("Hoja técnica BD LEVANTE no encontrada.")
 
@@ -480,13 +444,11 @@ elif menu == "6. Lotes Finalizados - Producción":
     
     st.info("""
     **Métricas Zootécnicas y Mortalidad:**  
-    Cruzando el costo final del galpón con variables biológicas (como % Mortalidad Hembra). Altas tasas de mortalidad encarecen drásticamente el prorrateo de Depreciaciones sobre las aves que aún siguen en producción.
+    Muestra la rentabilidad y el comportamiento biológico de todas las granjas y lotes del período seleccionado de manera directa.
     """)
     
     if not df_prod.empty:
         df_p = df_prod[df_prod["Periodo"] == p_actual].copy()
-        if granja_sel: df_p = df_p[df_p["Nombre Granja"].isin(granja_sel)]
-        if lote_sel: df_p = df_p[df_p["Lote"].astype(str).isin(lote_sel)]
         
         if not df_p.empty:
             # --- Matriz Resumen de Granjas ---
@@ -505,7 +467,7 @@ elif menu == "6. Lotes Finalizados - Producción":
             }), use_container_width=True)
 
             st.markdown("---")
-            st.markdown("**Desglose Exacto Lote a Lote**")
+            st.markdown("### 📊 Desglose Exacto Lote a Lote")
             cols_mostrar = ['Nombre Granja', 'Lote', 'Hembras Encasetadas', 'Mortalidad Hembra', '%Mortalidad Hembra']
             if 'Costo total Producción' in df_p.columns: cols_mostrar.append('Costo total Producción')
             if 'Total Aves Fin Producción' in df_p.columns: cols_mostrar.append('Total Aves Fin Producción')
@@ -517,4 +479,4 @@ elif menu == "6. Lotes Finalizados - Producción":
                 "Total Aves Fin Producción": "{:,.0f}"
             }), use_container_width=True)
         else:
-            st.warning("No hay datos técnicos de producción disponibles para los filtros aplicados.")
+            st.warning("No hay datos técnicos de producción disponibles para el período aplicado.")
