@@ -70,6 +70,7 @@ BITACORA DE DEPURACION Y RECONCILIACION DE DATOS (proceso de validacion previo a
 ==================================================================================================
 """
 
+import re
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -278,6 +279,29 @@ def limpiar_lote(s):
     return s
 
 
+def normalizar_granja(s):
+    """Normaliza el nombre de granja para poder cruzar entre hojas.
+    'BASE ZCO001' (columna 'Nombre 1') usa el prefijo 'GRANJA ' (ej. 'GRANJA CALUCE'),
+    mientras que 'BD LEVANTE' y 'BD PRODUCCION' (columna 'Nombre Granja') NO lo usan (ej. 'CALUCE').
+    Esta funcion quita el prefijo y estandariza mayusculas/espacios para que ambas fuentes
+    queden con el mismo nombre de granja y se puedan agregar en una sola matriz."""
+    if pd.isna(s):
+        return "Sin Granja Asignada"
+    s = str(s).strip().upper()
+    s = re.sub(r"^GRANJA\s+", "", s)
+    s = re.sub(r"\s+", " ", s)
+    # BD PRODUCCION trae variantes abreviadas adicionales (ej. 'FONDA', 'TABLAZO', 'TRIUNFO') que
+    # tambien deben unificarse contra el nombre estandar usado en BASE ZCO001 / BD LEVANTE.
+    alias = {
+        "EL TRIUNFO REPRO": "EL TRIUNFO REP",
+        "TRIUNFO": "EL TRIUNFO REP",
+        "FONDA": "LA FONDA",
+        "MARCELA": "LA MARCELA",
+        "TABLAZO": "EL TABLAZO",
+    }
+    return alias.get(s, s)
+
+
 def buscar_excel_predeterminado():
     for carpeta in (Path("data/raw"), Path(".")):
         if carpeta.exists():
@@ -323,14 +347,26 @@ def diagnostico_produccion(piv, texto_contexto):
     tendencia = "creciente \U0001F4C8" if var_total > 0 else "decreciente \U0001F4C9"
     dependencia = ("aumentando la dependencia de terceros" if part_ext_fin > part_ext_ini
                    else "reduciendo la dependencia de terceros")
-    caja = "caja-exito" if var_propios >= 0 else "caja-alerta"
-    return (f'<div class="{caja}"><b>\U0001F4DD Diagnostico de Produccion:</b><br>'
+    caja_actual = "caja-exito" if var_propios >= 0 else "caja-alerta"
+
+    if var_propios > 0 and part_ext_fin <= part_ext_ini:
+        mejora = ("La produccion propia crece y ademas gana participacion frente a terceros: el paso natural es "
+                   "consolidar capacidad instalada (galpones, pie de cria) antes de seguir dependiendo de maquila.")
+    elif var_propios > 0 and part_ext_fin > part_ext_ini:
+        mejora = ("Aunque la produccion propia crece, la maquila externa crece mas rapido. Evaluar el costo real de "
+                   "la produccion externa frente al margen que deja la propia, para decidir si conviene invertir en "
+                   "expansion propia en lugar de seguir creciendo via terceros.")
+    else:
+        mejora = ("La produccion propia cae. Priorizar: 1) diagnostico sanitario y de postura en planteles propios, "
+                   "2) revisar plan de encasetamiento y renovacion de parvadas, 3) usar la maquila solo como colchon "
+                   "temporal mientras se corrige la causa raiz, no como estrategia permanente.")
+
+    return (f'<div class="{caja_actual}"><b>\U0001F4CA Situacion Actual:</b><br>'
             f'La produccion total muestra una tendencia <b>{tendencia}</b> con variacion de <b>{formato_pct(var_total)}</b> '
             f'entre el inicio y el fin del rango analizado.<br>'
             f'La produccion <b>propia</b> vario <b>{formato_pct(var_propios)}</b>, mientras la participacion de terceros '
-            f'(externos) pasa de {part_ext_ini:,.1f}% a {part_ext_fin:,.1f}%, {dependencia}.<br>'
-            f'<i>\U0001F4A1 Accion recomendada:</i> {"Sostener el ritmo de crecimiento propio y evaluar reducir maquila externa por margen." if var_propios > 0 else "Revisar causas de caida en planteles propios (mortalidad, postura) antes de compensar con mas volumen externo."}'
-            f'</div>')
+            f'(externos) pasa de {part_ext_ini:,.1f}% a {part_ext_fin:,.1f}%, {dependencia}.</div>'
+            f'<div class="caja-info"><b>\U0001F680 Como Mejorarlo:</b><br>{mejora}</div>')
 
 
 def diagnostico_linea_produccion(piv2):
@@ -340,11 +376,19 @@ def diagnostico_linea_produccion(piv2):
     total_linea = piv2.groupby("RAZA 2")["TOTAL"].sum().sort_values(ascending=False)
     lider = total_linea.index[0]
     part_lider = division_segura(total_linea.iloc[0], total_linea.sum()) * 100
-    return (f'<div class="caja-info"><b>\U0001F4DD Diagnostico de Mix Genetico:</b><br>'
+    rezagada = total_linea.index[-1] if len(total_linea) > 1 else None
+    part_rezagada = division_segura(total_linea.iloc[-1], total_linea.sum()) * 100 if rezagada is not None else 0
+
+    mejora = (f'Antes de reforzar el encasetamiento de <b>{lider}</b>, validar su costo unitario en la pagina '
+              f'"Detalle Costos por Linea": una alta participacion en volumen no siempre significa alta rentabilidad.')
+    if rezagada is not None and part_rezagada < 10:
+        mejora += (f' La linea <b>{rezagada}</b> aporta solo {part_rezagada:,.1f}% del volumen; evaluar si vale la pena '
+                    f'mantenerla activa o consolidar el mix genetico en menos lineas para ganar escala y eficiencia.')
+
+    return (f'<div class="caja-info"><b>\U0001F4CA Situacion Actual:</b><br>'
             f'La linea <b>{lider}</b> concentra el <b>{part_lider:,.1f}%</b> de la produccion total del periodo, '
-            f'consolidandose como el activo genetico principal de la operacion.<br>'
-            f'<i>\U0001F4A1 Accion recomendada:</i> Verificar que la capacidad de encasetamiento futuro priorice esta linea '
-            f'solo si su costo unitario tambien es competitivo (ver pagina de Costo por Linea).</div>')
+            f'consolidandose como el activo genetico principal de la operacion.</div>'
+            f'<div class="caja-info"><b>\U0001F680 Como Mejorarlo:</b><br>{mejora}</div>')
 
 
 def generar_diagnostico_costos(df_vif, var_total, p_actual, p_base):
@@ -353,14 +397,19 @@ def generar_diagnostico_costos(df_vif, var_total, p_actual, p_base):
         return ""
     df_ord = df_vif.reindex(df_vif["Impacto ($/HF)"].abs().sort_values(ascending=False).index)
     top = df_ord.iloc[0]
-    caja = "caja-alerta" if var_total > 0 else "caja-exito"
+    caja_actual = "caja-alerta" if var_total > 0 else "caja-exito"
     veredicto = "se incremento" if var_total > 0 else "se redujo"
     recomendacion = RECOMENDACIONES_RUBRO.get(top["Rubro"], "Revisar el detalle operativo de este rubro con el equipo tecnico.")
-    return (f'<div class="{caja}"><b>\U0001F4DD Diagnostico Ejecutivo:</b><br>'
+
+    top3 = df_ord.head(3)
+    lista_top3 = "".join(f"<li><b>{r['Rubro']}</b>: ${r['Impacto ($/HF)']:+,.1f} COP/huevo</li>" for _, r in top3.iterrows())
+
+    return (f'<div class="{caja_actual}"><b>\U0001F4CA Situacion Actual:</b><br>'
             f'El costo del huevo fertil <b>{veredicto} en ${abs(var_total):,.1f} COP</b> entre {p_base} y {p_actual}.<br>'
-            f'El rubro con <b>mayor impacto individual</b> fue <b>{top["Rubro"]}</b>, explicando '
-            f'<b>${top["Impacto ($/HF)"]:+,.1f} COP/huevo</b> de la variacion total.<br>'
-            f'<i>\U0001F4A1 Factor critico - {top["Rubro"]}:</i> {recomendacion}</div>')
+            f'Los 3 rubros de mayor impacto en la variacion son:<ul>{lista_top3}</ul></div>'
+            f'<div class="caja-info"><b>\U0001F680 Como Mejorarlo:</b><br>'
+            f'Foco prioritario en <b>{top["Rubro"]}</b>, el de mayor impacto individual: {recomendacion} '
+            f'Usar el Modulo Predictivo mas abajo para simular cuanto se reduciria el costo si se corrige este rubro.</div>')
 
 
 def diagnostico_lote(agg):
@@ -371,13 +420,18 @@ def diagnostico_lote(agg):
     mejor = agg.sort_values("Costo Unit.", ascending=True).iloc[0]
     promedio = division_segura(agg["Costo_Total"].sum(), agg["Huevos_Fertiles"].sum())
     brecha = division_segura(peor["Costo Unit."] - mejor["Costo Unit."], mejor["Costo Unit."]) * 100
-    return (f'<div class="caja-alerta"><b>\U0001F6A8 Auditoria de Ineficiencia en Campo:</b><br>'
+    n_sobre_promedio = (agg["Costo Unit."] > promedio).sum()
+
+    return (f'<div class="caja-alerta"><b>\U0001F4CA Situacion Actual:</b><br>'
             f'El <b>Lote {peor["lote"]}</b> ({peor["Linea"]}) tiene el costo unitario mas alto: '
             f'<b>${peor["Costo Unit."]:,.1f} COP/HF</b> frente al promedio de ${promedio:,.1f}.<br>'
             f'El <b>Lote {mejor["lote"]}</b> ({mejor["Linea"]}) es el mas eficiente con ${mejor["Costo Unit."]:,.1f} COP/HF, '
-            f'una brecha de <b>{brecha:,.0f}%</b> entre extremos.<br>'
-            f'<i>\U0001F4A1 Accion inmediata:</i> Lotes con costo muy superior al promedio suelen estar al final de su vida '
-            f'productiva (baja postura = divisor pequeno = costo disparado). Evaluar descarte comercial programado.</div>')
+            f'una brecha de <b>{brecha:,.0f}%</b> entre extremos. <b>{n_sobre_promedio} de {len(agg)}</b> lotes '
+            f'estan por encima del promedio general.</div>'
+            f'<div class="caja-info"><b>\U0001F680 Como Mejorarlo:</b><br>'
+            f'Auditar primero el <b>Lote {peor["lote"]}</b>: si esta al final de su vida productiva (baja postura), '
+            f'programar descarte comercial. Replicar en los lotes mas costosos las practicas de manejo del '
+            f'<b>Lote {mejor["lote"]}</b> (alimentacion, sanidad, densidad), documentandolas como estandar de granja.</div>')
 
 
 def diagnostico_linea_costo(df_gen):
@@ -386,11 +440,17 @@ def diagnostico_linea_costo(df_gen):
         return ""
     peor = df_gen.sort_values("Costo Unitario ($/HF)", ascending=False).iloc[0]
     mejor = df_gen.sort_values("Costo Unitario ($/HF)", ascending=True).iloc[0]
-    return (f'<div class="caja-info"><b>\U0001F4DD Diagnostico por Genetica:</b><br>'
+    brecha = division_segura(peor["Costo Unitario ($/HF)"] - mejor["Costo Unitario ($/HF)"], mejor["Costo Unitario ($/HF)"]) * 100
+
+    return (f'<div class="caja-info"><b>\U0001F4CA Situacion Actual:</b><br>'
             f'La linea <b>{peor["linea"]}</b> es la mas costosa por huevo (${peor["Costo Unitario ($/HF)"]:,.1f}), '
-            f'mientras <b>{mejor["linea"]}</b> es la mas eficiente (${mejor["Costo Unitario ($/HF)"]:,.1f}).<br>'
-            f'<i>\U0001F4A1 Accion recomendada:</i> Si {peor["linea"]} es persistentemente mas costosa, evaluar su rentabilidad '
-            f'final considerando tambien el % de incubabilidad y nacimientos en planta, no solo el costo en granja.</div>')
+            f'mientras <b>{mejor["linea"]}</b> es la mas eficiente (${mejor["Costo Unitario ($/HF)"]:,.1f}), '
+            f'una brecha de <b>{brecha:,.0f}%</b> entre ambas geneticas.</div>'
+            f'<div class="caja-info"><b>\U0001F680 Como Mejorarlo:</b><br>'
+            f'Si <b>{peor["linea"]}</b> es persistentemente mas costosa, evaluar su rentabilidad final considerando '
+            f'tambien el % de incubabilidad y nacimientos en planta, no solo el costo en granja. Si el sobrecosto no se '
+            f'compensa con mejor desempeno en incubacion, reducir gradualmente su participacion en el mix genetico a favor '
+            f'de <b>{mejor["linea"]}</b>.</div>')
 
 
 def diagnostico_alimento(df_filtrado):
@@ -401,11 +461,26 @@ def diagnostico_alimento(df_filtrado):
     inicio, fin = serie.iloc[0], serie.iloc[-1]
     var_precio = division_segura(fin["Precio Kg Alimento"] - inicio["Precio Kg Alimento"], inicio["Precio Kg Alimento"]) * 100
     var_gramos = division_segura(fin["Gramos Alimento/Huevo"] - inicio["Gramos Alimento/Huevo"], inicio["Gramos Alimento/Huevo"]) * 100
-    caja = "caja-alerta" if (var_precio > 0 and var_gramos > 0) else "caja-info"
-    return (f'<div class="{caja}"><b>\U0001F4DD Diagnostico Nutricional:</b><br>'
+    caja_actual = "caja-alerta" if (var_precio > 0 and var_gramos > 0) else "caja-info"
+
+    if var_precio > 0 and var_gramos > 0:
+        mejora = ("Doble presion sobre el costo. Accion en dos frentes: (1) Compras: renegociar precio de materias "
+                   "primas o buscar proveedores alternos; (2) Campo: revisar comederos por desperdicio, calidad del "
+                   "pellet y formulacion nutricional para bajar el consumo por huevo.")
+    elif var_precio > 0:
+        mejora = ("El precio sube pero la conversion se mantiene o mejora. Foco en Compras: negociar contratos a futuro "
+                   "de materias primas (maiz, soya) para amortiguar la volatilidad de precio.")
+    elif var_gramos > 0:
+        mejora = ("El precio esta controlado pero el consumo por huevo sube. Foco en Campo: revisar desperdicio, "
+                   "programa de alimentacion por fases y estado sanitario (aves enfermas comen mas y producen menos).")
+    else:
+        mejora = ("Ambos indicadores mejoran. Documentar las practicas actuales de compra y manejo nutricional como "
+                   "estandar para sostener el resultado en los proximos periodos.")
+
+    return (f'<div class="{caja_actual}"><b>\U0001F4CA Situacion Actual:</b><br>'
             f'El precio del Kg de alimento vario <b>{formato_pct(var_precio)}</b> en el rango, mientras el consumo por '
-            f'huevo (conversion) vario <b>{formato_pct(var_gramos)}</b>.<br>'
-            f'<i>\U0001F4A1 Lectura clave:</i> {"Ambos indicadores suben simultaneamente: doble presion sobre el costo, se recomienda accion urgente en compras y en campo." if (var_precio > 0 and var_gramos > 0) else "El impacto esta parcialmente compensado; monitorear el indicador que aun no mejora."}</div>')
+            f'huevo (conversion) vario <b>{formato_pct(var_gramos)}</b>.</div>'
+            f'<div class="caja-info"><b>\U0001F680 Como Mejorarlo:</b><br>{mejora}</div>')
 
 
 def diagnostico_levante(tabla_costo_anio, tabla_resultados):
@@ -423,12 +498,18 @@ def diagnostico_levante(tabla_costo_anio, tabla_resultados):
         rubro_top = deltas.index[0]
     else:
         rubro_top = "N/D"
-    caja = "caja-alerta" if var > 0 else "caja-exito"
-    return (f'<div class="{caja}"><b>\U0001F4DD Diagnostico de Levante:</b><br>'
+    caja_actual = "caja-alerta" if var > 0 else "caja-exito"
+
+    mejora = (f'Cruzar el incremento en <b>{rubro_top}</b> con los resultados tecnicos (pagina 8): si la mortalidad '
+              f'tambien subio, el sobrecosto es sanitario/nutricional; si se mantiene estable, revisar precios de compra '
+              f'del insumo asociado a este rubro.') if var > 0 else (
+              'El costo de levante mejoro respecto al ano anterior. Mantener el protocolo actual de manejo y nutricion, '
+              'y usarlo como referencia para estandarizar el resto de granjas.')
+
+    return (f'<div class="{caja_actual}"><b>\U0001F4CA Situacion Actual:</b><br>'
             f'El costo total de levante por ave vario <b>{formato_pct(var)}</b> respecto al ano anterior.<br>'
-            f'El rubro con mayor incremento absoluto fue <b>{rubro_top}</b>.<br>'
-            f'<i>\U0001F4A1 Accion recomendada:</i> Cruzar este resultado con la mortalidad y el consumo de alimento por ave '
-            f'para identificar si el sobrecosto es sanitario, nutricional o de mano de obra.</div>')
+            f'El rubro con mayor incremento absoluto fue <b>{rubro_top}</b>.</div>'
+            f'<div class="caja-info"><b>\U0001F680 Como Mejorarlo:</b><br>{mejora}</div>')
 
 
 def diagnostico_tecnico_levante(tabla_anio):
@@ -436,11 +517,18 @@ def diagnostico_tecnico_levante(tabla_anio):
     if tabla_anio.empty or "%Mortalidad Hembra" not in tabla_anio.columns or len(tabla_anio) < 2:
         return ""
     var_mort = tabla_anio["%Mortalidad Hembra"].iloc[-1] - tabla_anio["%Mortalidad Hembra"].iloc[-2]
-    caja = "caja-alerta" if var_mort > 0 else "caja-exito"
-    return (f'<div class="{caja}"><b>\U0001F4DD Diagnostico Tecnico - Levante:</b><br>'
+    caja_actual = "caja-alerta" if var_mort > 0 else "caja-exito"
+
+    mejora = ("Investigar causas sanitarias o de manejo en las primeras semanas de vida (foco critico de la mortalidad "
+               "total): revisar temperatura de la campana de cria, calidad del agua/alimento inicial y plan de vacunacion "
+               "temprana.") if var_mort > 0 else (
+               "Mantener los protocolos actuales de manejo en las primeras semanas; documentar el detalle para "
+               "replicarlo en granjas con resultados menos favorables.")
+
+    return (f'<div class="{caja_actual}"><b>\U0001F4CA Situacion Actual:</b><br>'
             f'La mortalidad de hembras {"aumento" if var_mort > 0 else "disminuyo"} '
-            f'<b>{abs(var_mort):,.2f} puntos porcentuales</b> respecto al ano anterior.<br>'
-            f'<i>\U0001F4A1 Accion recomendada:</i> {"Investigar causas sanitarias o de manejo en las primeras semanas, foco critico de la mortalidad total." if var_mort > 0 else "Mantener protocolos actuales de manejo; el resultado es favorable."}</div>')
+            f'<b>{abs(var_mort):,.2f} puntos porcentuales</b> respecto al ano anterior.</div>'
+            f'<div class="caja-info"><b>\U0001F680 Como Mejorarlo:</b><br>{mejora}</div>')
 
 
 def diagnostico_produccion_finalizada(tabla_anio_costo):
@@ -450,10 +538,17 @@ def diagnostico_produccion_finalizada(tabla_anio_costo):
     if len(tabla_anio_costo) < 2:
         return ""
     var = tabla_anio_costo["Costo Total Produccion/Huevo Incubable"].iloc[-1] - tabla_anio_costo["Costo Total Produccion/Huevo Incubable"].iloc[-2]
-    caja = "caja-alerta" if var > 0 else "caja-exito"
-    return (f'<div class="{caja}"><b>\U0001F4DD Diagnostico Costo HF Finalizados:</b><br>'
-            f'El costo del huevo fertil en lotes finalizados vario <b>${var:+,.1f} COP</b> respecto al ano anterior.<br>'
-            f'<i>\U0001F4A1 Accion recomendada:</i> {"Revisar el detalle por lote para aislar si el sobrecosto es generalizado o puntual de pocos lotes." if var > 0 else "Documentar las practicas del periodo, ya que generaron eficiencia sostenida."}</div>')
+    caja_actual = "caja-alerta" if var > 0 else "caja-exito"
+
+    mejora = ("Revisar el detalle por lote (tabla inferior) para aislar si el sobrecosto es generalizado o puntual de "
+               "pocos lotes; si es puntual, enfocar el analisis en esos lotes especificos (edad, linea, granja) antes de "
+               "tomar decisiones a nivel general.") if var > 0 else (
+               "Documentar las practicas del periodo (alimentacion, sanidad, manejo de postura), ya que generaron "
+               "eficiencia sostenida en el costo del huevo fertil.")
+
+    return (f'<div class="{caja_actual}"><b>\U0001F4CA Situacion Actual:</b><br>'
+            f'El costo del huevo fertil en lotes finalizados vario <b>${var:+,.1f} COP</b> respecto al ano anterior.</div>'
+            f'<div class="caja-info"><b>\U0001F680 Como Mejorarlo:</b><br>{mejora}</div>')
 
 
 def diagnostico_tecnico_produccion(tabla_anio_tec):
@@ -462,12 +557,41 @@ def diagnostico_tecnico_produccion(tabla_anio_tec):
         return ""
     var_inc = tabla_anio_tec["% Incubabilidad"].iloc[-1] - tabla_anio_tec["% Incubabilidad"].iloc[-2]
     var_nac = (tabla_anio_tec["%Nacimiento"].iloc[-1] - tabla_anio_tec["%Nacimiento"].iloc[-2]) if "%Nacimiento" in tabla_anio_tec.columns else np.nan
-    caja = "caja-exito" if var_inc >= 0 else "caja-alerta"
-    return (f'<div class="{caja}"><b>\U0001F4DD Diagnostico Tecnico - Produccion:</b><br>'
+    caja_actual = "caja-exito" if var_inc >= 0 else "caja-alerta"
+
+    mejora = ("La incubabilidad y el nacimiento dependen de la calidad del huevo en granja (peso, limpieza, manejo de "
+               "nido) y de la manipulacion/transporte hacia la planta. Coordinar con el equipo de incubacion los "
+               "hallazgos de calidad de cascara y revisar el tiempo entre recoleccion y entrada a incubadora.") if var_inc < 0 else (
+               "La incubabilidad mejora; mantener el estandar actual de recoleccion y manejo del huevo y monitorear "
+               "que el % de nacimiento acompañe la misma tendencia.")
+
+    return (f'<div class="{caja_actual}"><b>\U0001F4CA Situacion Actual:</b><br>'
             f'La incubabilidad {"mejoro" if var_inc >= 0 else "empeoro"} <b>{abs(var_inc):,.2f} p.p.</b> respecto al ano anterior'
-            f'{f", con nacimientos variando {var_nac:+.2f} p.p." if pd.notna(var_nac) else ""}<br>'
-            f'<i>\U0001F4A1 Accion recomendada:</i> La incubabilidad y el nacimiento dependen de la calidad del huevo en granja '
-            f'(peso, limpieza, manejo de nido); coordinar con planta de incubacion los hallazgos de calidad de cascara.</div>')
+            f'{f", con nacimientos variando {var_nac:+.2f} p.p." if pd.notna(var_nac) else ""}.</div>'
+            f'<div class="caja-info"><b>\U0001F680 Como Mejorarlo:</b><br>{mejora}</div>')
+
+
+def diagnostico_granja(agg_granja):
+    """Pagina 11: Matriz de costos por granja."""
+    if agg_granja.empty or len(agg_granja) < 2:
+        return ""
+    peor = agg_granja.sort_values("Costo Unit. ($/HF)", ascending=False).iloc[0]
+    mejor = agg_granja.sort_values("Costo Unit. ($/HF)", ascending=True).iloc[0]
+    promedio = division_segura(agg_granja["Costo Total"].sum(), agg_granja["Huevos Fertiles"].sum())
+    brecha = division_segura(peor["Costo Unit. ($/HF)"] - mejor["Costo Unit. ($/HF)"], mejor["Costo Unit. ($/HF)"]) * 100
+    n_sobre_promedio = (agg_granja["Costo Unit. ($/HF)"] > promedio).sum()
+
+    return (f'<div class="caja-alerta"><b>\U0001F4CA Situacion Actual:</b><br>'
+            f'La <b>Granja {peor["Granja"]}</b> tiene el costo unitario mas alto del grupo: '
+            f'<b>${peor["Costo Unit. ($/HF)"]:,.1f} COP/HF</b> frente al promedio de ${promedio:,.1f}.<br>'
+            f'La <b>Granja {mejor["Granja"]}</b> es la mas eficiente con ${mejor["Costo Unit. ($/HF)"]:,.1f} COP/HF, '
+            f'una brecha de <b>{brecha:,.0f}%</b> entre extremos. <b>{n_sobre_promedio} de {len(agg_granja)}</b> granjas '
+            f'estan por encima del promedio general.</div>'
+            f'<div class="caja-info"><b>\U0001F680 Como Mejorarlo:</b><br>'
+            f'Visitar en campo la <b>Granja {peor["Granja"]}</b> para identificar si el sobrecosto es estructural '
+            f'(arriendo, distancia, infraestructura vieja) o de manejo (alimentacion, sanidad, mano de obra). '
+            f'Usar a <b>{mejor["Granja"]}</b> como benchmark interno: replicar su plan nutricional y de bioseguridad '
+            f'en las granjas con costo superior al promedio.</div>')
 
 
 # =============================================================================
@@ -507,8 +631,10 @@ def cargar_y_procesar_datos(fuente_archivo):
     df_raw["Cantidad"] = df_raw["Cantidad"].apply(limpiar_numero)
     if "Lote" in df_raw.columns:
         df_raw["Lote_str"] = df_raw["Lote"].apply(limpiar_lote)
-    # 'Nombre 1' ya trae la granja asociada a cada lote (validado contra BD LEVANTE/BD PRODUCCION)
-    df_raw["Granja"] = df_raw["Nombre 1"].fillna("Sin Granja Asignada") if "Nombre 1" in df_raw.columns else "Sin Granja Asignada"
+    # 'Nombre 1' trae la granja asociada a cada lote, pero con el prefijo "GRANJA " (ej. 'GRANJA CALUCE').
+    # En BD LEVANTE y BD PRODUCCION la misma granja aparece SIN el prefijo (ej. 'CALUCE').
+    # Se normaliza con normalizar_granja() para poder cruzar por nombre de granja entre todas las hojas.
+    df_raw["Granja"] = df_raw["Nombre 1"].apply(normalizar_granja) if "Nombre 1" in df_raw.columns else "Sin Granja Asignada"
 
     df_hf = df_raw[df_raw["Texto breve de material"] == MATERIAL_HF]
     hf_mes = df_hf.groupby("Periodo")["Cantidad"].sum()
@@ -570,6 +696,10 @@ def cargar_y_procesar_datos(fuente_archivo):
         df_lev = normaliza_periodo(df_lev, col_anio="Año", col_mes_num="No Mes")
         if "Lote" in df_lev.columns:
             df_lev["Lote_str"] = df_lev["Lote"].apply(limpiar_lote)
+        # 'Nombre Granja' en esta hoja NO trae el prefijo "GRANJA " (ej. 'CALUCE'), se normaliza igual
+        # para poder cruzar con BASE ZCO001 (que si trae el prefijo, ej. 'GRANJA CALUCE').
+        if "Nombre Granja" in df_lev.columns:
+            df_lev["Granja"] = df_lev["Nombre Granja"].apply(normalizar_granja)
 
     df_prod = leer("BD PRODUCCIÓN")
     if not df_prod.empty:
@@ -579,11 +709,23 @@ def cargar_y_procesar_datos(fuente_archivo):
             df_prod["Periodo"] = df_prod["Anio"].astype(str) + "-" + df_prod["Mes_Num"].astype(str).str.zfill(2)
         if "Lote" in df_prod.columns:
             df_prod["Lote_str"] = df_prod["Lote"].apply(limpiar_lote)
+        if "Nombre Granja" in df_prod.columns:
+            df_prod["Granja"] = df_prod["Nombre Granja"].apply(normalizar_granja)
+
+    # Diccionario Lote -> Granja construido desde BASE ZCO001 (fuente mas confiable y granular).
+    # Se usa como respaldo para poblar la Granja en 'BD CTO LINEA', que no trae ese campo directamente.
+    mapa_lote_granja = {}
+    if "Lote_str" in df_raw.columns and "Granja" in df_raw.columns:
+        mapa_lote_granja = (df_raw.dropna(subset=["Lote_str"])
+                             .drop_duplicates("Lote_str", keep="last")
+                             .set_index("Lote_str")["Granja"].to_dict())
+    if not df_ctolinea.empty and "lote" in df_ctolinea.columns:
+        df_ctolinea["Granja"] = df_ctolinea["lote"].map(mapa_lote_granja).fillna("Sin Granja Asignada")
 
     return {
         "df": df_res, "rubros": rubros, "df_raw": df_raw,
         "df_pn": df_pn, "df_ctolinea": df_ctolinea, "df_hist": df_hist,
-        "df_lev": df_lev, "df_prod": df_prod,
+        "df_lev": df_lev, "df_prod": df_prod, "mapa_lote_granja": mapa_lote_granja,
     }
 
 
@@ -670,6 +812,7 @@ menu = st.sidebar.radio(
         "8. Resultados Tecnicos Levante",
         "9. Costo HF Lotes Finalizados (Produccion)",
         "10. Resultados Tecnicos Produccion",
+        "11. Matriz de Costos por Granja",
     ],
 )
 
@@ -1219,3 +1362,102 @@ elif menu == "10. Resultados Tecnicos Produccion":
         tabla_lote_tecnica = dprod_anio_actual.groupby("Lote_str")[columnas_tecnicas].mean(numeric_only=True)
         st.dataframe(tabla_lote_tecnica.style.format("{:,.2f}").background_gradient(subset=["% Incubabilidad"], cmap="Greens"),
                      use_container_width=True)
+
+
+# =============================================================================
+# PAGINA 11 — MATRIZ DE COSTOS POR GRANJA
+# =============================================================================
+elif menu == "11. Matriz de Costos por Granja":
+    st.markdown('<p class="titulo-principal">11. MATRIZ DE COSTOS POR GRANJA</p>', unsafe_allow_html=True)
+    st.markdown(f'<p class="subtitulo">{texto_contexto}</p>', unsafe_allow_html=True)
+    st.caption("Nota: la Granja se normaliza automaticamente entre hojas (BASE ZCO001 usa 'GRANJA CALUCE', "
+               "BD LEVANTE/BD PRODUCCION usan solo 'CALUCE'); en esta matriz ambas se muestran como una sola entidad.")
+
+    if "Granja" not in df_raw.columns:
+        st.warning("No se encontro informacion de Granja en la hoja 'BASE ZCO001'.")
+        st.stop()
+
+    df_raw_granja = df_raw_rango.copy()
+    df_hf_granja = df_raw_granja[df_raw_granja["Texto breve de material"] == MATERIAL_HF]
+    hf_por_granja = df_hf_granja.groupby("Granja")["Cantidad"].sum()
+
+    df_costos_granja = df_raw_granja[~df_raw_granja["Texto explicativo"].isin([TEXTO_LIQUIDACION, TEXTO_DIFERENCIA_PRECIO])].copy()
+    df_costos_granja["Rubro"] = df_costos_granja["Texto explicativo"].map(lambda x: MAPA_RUBROS.get(x, x))
+    costos_piv_granja = df_costos_granja.groupby(["Granja", "Rubro"])["Totales"].sum().unstack(fill_value=0)
+
+    df_aprov_granja = df_raw_granja[(df_raw_granja["Texto explicativo"] == TEXTO_LIQUIDACION) &
+                                     (df_raw_granja["Texto breve de material"] != MATERIAL_HF)]
+    aprov_por_granja = df_aprov_granja.groupby("Granja")["Totales"].sum()
+
+    agg_granja = costos_piv_granja.copy()
+    agg_granja[RUBRO_APROVECHAMIENTO] = aprov_por_granja.reindex(agg_granja.index).fillna(0)
+    agg_granja["Costo Total"] = agg_granja.sum(axis=1)
+    agg_granja["Huevos Fertiles"] = hf_por_granja.reindex(agg_granja.index).fillna(0)
+    agg_granja["Costo Unit. ($/HF)"] = division_segura(agg_granja["Costo Total"], agg_granja["Huevos Fertiles"])
+    agg_granja = agg_granja.reset_index()
+    agg_granja = agg_granja[agg_granja["Granja"] != "Sin Granja Asignada"]
+    agg_granja = agg_granja[agg_granja["Huevos Fertiles"] > 0].sort_values("Costo Unit. ($/HF)", ascending=False)
+
+    if agg_granja.empty:
+        st.warning("No hay datos de costo por granja en el periodo seleccionado.")
+        st.stop()
+
+    st.markdown(diagnostico_granja(agg_granja), unsafe_allow_html=True)
+
+    total_hf_g, total_costo_g = agg_granja["Huevos Fertiles"].sum(), agg_granja["Costo Total"].sum()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Granjas Activas", f"{len(agg_granja)}")
+    c2.metric("Huevos Fertiles del Periodo", f"{total_hf_g:,.0f}")
+    c3.metric("Costo Unitario Promedio", f"${division_segura(total_costo_g, total_hf_g):,.1f}")
+
+    col1, col2 = st.columns([1.3, 1])
+    with col1:
+        promedio_g = division_segura(total_costo_g, total_hf_g)
+        agg_ord_g = agg_granja.sort_values("Costo Unit. ($/HF)", ascending=True)
+        colores_g = ["#EF4444" if v > promedio_g else "#10B981" for v in agg_ord_g["Costo Unit. ($/HF)"]]
+        fig_granja_barras = go.Figure(go.Bar(
+            x=agg_ord_g["Costo Unit. ($/HF)"], y=agg_ord_g["Granja"], orientation="h",
+            marker_color=colores_g, text=agg_ord_g["Costo Unit. ($/HF)"].map(lambda v: f"${v:,.0f}"),
+            textposition="outside"))
+        fig_granja_barras.add_vline(x=promedio_g, line_dash="dash", line_color="#1E3A8A", annotation_text="Promedio")
+        estilizar_grafico(fig_granja_barras, "Costo Unitario ($/HF) por Granja",
+                           "Rojo = sobre el promedio | Verde = bajo el promedio", altura=500)
+        fig_granja_barras.update_xaxes(title_text="$ / Huevo")
+        st.plotly_chart(fig_granja_barras, use_container_width=True)
+    with col2:
+        fig_treemap_granja = px.treemap(agg_granja, path=["Granja"], values="Huevos Fertiles",
+                                         color="Costo Unit. ($/HF)", color_continuous_scale="RdYlGn_r")
+        estilizar_grafico(fig_treemap_granja, "Volumen y Costo por Granja",
+                           "Tamano = Huevos | Color = Costo unitario", altura=500)
+        st.plotly_chart(fig_treemap_granja, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("\U0001F4CB Matriz Detallada de Costos por Granja y Rubro")
+    columnas_rubro_granja = [c for c in list(MAPA_RUBROS.values()) + [RUBRO_APROVECHAMIENTO] if c in agg_granja.columns]
+    tabla_granja_final = agg_granja[["Granja"] + columnas_rubro_granja +
+                                     ["Costo Total", "Huevos Fertiles", "Costo Unit. ($/HF)"]].set_index("Granja")
+    st.dataframe(
+        tabla_granja_final.style.format(
+            {**{c: "${:,.0f}" for c in columnas_rubro_granja}, "Costo Total": "${:,.0f}",
+             "Huevos Fertiles": "{:,.0f}", "Costo Unit. ($/HF)": "${:,.1f}"}
+        ).background_gradient(subset=["Costo Unit. ($/HF)"], cmap="RdYlGn_r"),
+        use_container_width=True,
+    )
+
+    st.subheader("\U0001F4C8 Evolucion Mensual del Costo Unitario por Granja")
+    df_evol_granja = df_raw_rango[df_raw_rango["Granja"] != "Sin Granja Asignada"].copy()
+    df_hf_evol = df_evol_granja[df_evol_granja["Texto breve de material"] == MATERIAL_HF].groupby(
+        ["Periodo", "Granja"])["Cantidad"].sum().reset_index(name="Huevos Fertiles")
+    df_costo_evol = df_evol_granja[~df_evol_granja["Texto explicativo"].isin([TEXTO_LIQUIDACION, TEXTO_DIFERENCIA_PRECIO])].groupby(
+        ["Periodo", "Granja"])["Totales"].sum().reset_index(name="Costo Total")
+    df_evol_final = pd.merge(df_costo_evol, df_hf_evol, on=["Periodo", "Granja"], how="outer").fillna(0)
+    df_evol_final["Costo Unit."] = division_segura(df_evol_final["Costo Total"], df_evol_final["Huevos Fertiles"])
+    df_evol_final = df_evol_final[df_evol_final["Huevos Fertiles"] > 0]
+
+    if not df_evol_final.empty:
+        fig_evol_granja = px.line(df_evol_final.sort_values("Periodo"), x="Periodo", y="Costo Unit.", color="Granja", markers=True)
+        fig_evol_granja.update_traces(line_width=2.5)
+        estilizar_grafico(fig_evol_granja, "Evolucion del Costo Unitario ($/HF) por Granja", "Comparativo mensual", leyenda_derecha=True)
+        fig_evol_granja.update_yaxes(title_text="$ / Huevo")
+        fig_evol_granja.update_xaxes(title_text="Periodo")
+        st.plotly_chart(fig_evol_granja, use_container_width=True)
